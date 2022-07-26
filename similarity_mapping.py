@@ -4,14 +4,22 @@ import tkinter as tk
 from hyperspy.api import load
 from tkinter import filedialog
 import numpy as np
+from numpy import arange
 from pixstem.api import PixelatedSTEM
 from PIL import Image, ImageTk
 from scipy.ndimage.filters import gaussian_filter
 import requests
+from multiprocessing import Pool
+import tqdm
+from scipy import spatial
+from pandas import DataFrame
+import plotly.express as px
+
 
 # global variables
 file = None  # user selected file 
 selected_points = []  # user selected diffraction patterns
+similarity_values = None
 
 
 # prompts file dialog for user to select file
@@ -30,7 +38,7 @@ def load_file():
 
 
 # takes in an image and returns a filtered version (gaussian)
-def denoise_image(orig_image):
+def gaussian_denoise(orig_image):
     denoise_radius = 3
     denoised_image = gaussian_filter(orig_image, denoise_radius)
     return denoised_image
@@ -59,7 +67,7 @@ def create_surface_img(stem_file):
                 temp_array = temp_slice[r][section1:section2]
 
             # takes the average value of the pixels in the slice as adds them to an array that will be the surface image
-            surface_img[i].append(int(np.round(np.mean(np.asarray(denoise_image(temp_array))))))
+            surface_img[i].append(int(np.round(np.mean(np.asarray(temp_array)))))
         if i != len(stem_file.data) - 1:
             surface_img.append([])
 
@@ -77,7 +85,7 @@ def start_analysis():
         def reset_points():
             global selected_points
             selected_points = []
-            analysis_log['text'] = "Similarity mapping: please click on up to three points you would like to " \
+            analysis_log['text'] = "Similarity mapping: please click on points you would like to " \
                                    "use to analyze the phase similarity.\n"
     
         def confirm_point(point):
@@ -120,11 +128,15 @@ def start_analysis():
 
         def finalize_points():
             global selected_points
-            if len(selected_points) >= 2:
+            if len(selected_points) >= 1:
                 print("Selected points (x,y):")
                 for i in range(len(selected_points)):
                     print(f"point{i + 1} = {selected_points[i][0]}, {selected_points[i][1]}")
                 analysis_log['text'] = analysis_log['text'] + "Starting analysis...\n"
+                analysis(selected_points)
+                c2.unbind('<Button-1>')
+                r.destroy()
+                label1['text'] = label1['text'] + "Analysis complete.\n"
             else:
                 reset_points()
     
@@ -184,7 +196,86 @@ def start_analysis():
         
     else:
         label3['text'] = "Please select a file and try again.\n"
-        
+
+
+def analysis(points):
+    global file, similarity_values
+
+    point = points[0]
+
+    x_length = len(file.data[0])
+    y_length = len(file.data)
+    processing_list = [[]]
+    i = 0
+    for y in range(x_length):
+        for x in range(y_length):
+            processing_list.append([])
+            processing_list[i].append(file.data[point[1]][point[0]])
+            processing_list[i].append(file.data[y][x])
+            i += 1
+
+    del processing_list[-1]
+    # print(processing_list)
+    # print()
+    # print(len(processing_list))
+    # print(len(processing_list[0]))
+    # print(len(processing_list[0][0]))
+
+    results = []
+    pool = Pool(processes=None)
+    for output in tqdm.tqdm(pool.imap_unordered(cosine_similarity, processing_list),
+                            total=len(processing_list)):
+        results.append(output)
+        pass
+    pool.close()
+
+    similarity_values = np.zeros((y_length, x_length))
+    i = 0
+    for y in range(y_length):
+        for x in range(x_length):
+            similarity_values[y][x] = results[i]
+            i += 1
+
+    print(similarity_values)
+
+
+def cosine_similarity(img_arrays):
+    similarity = -1 * (spatial.distance.cosine(img_arrays[0].flatten(), img_arrays[1].flatten()) - 1)
+    return similarity
+
+
+def euclidean_similarity(img_arrays):
+    array1 = img_arrays[0].flatten()
+    array2 = img_arrays[1].flatten()
+    mag1 = np.linalg.norm(array1)
+    mag2 = np.linalg.norm(array2)
+    dist = 0
+    for n in range(len(array1)):
+        dist += (int(array1[n]) - int(array2[n]))**2
+    dist = np.sqrt(dist)
+    similarity = 1 - (dist/(abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
+    return similarity
+
+
+def heat_map():
+    global similarity_values
+    data = similarity_values.copy()
+    # d0 = float(input_distance)
+
+    # strain_values = []
+    # for i in range(len(data)):
+    #     strain_values.append([])
+    #     for j in range(len(data[i])):
+    #         if data[i][j] == 0:
+    #             strain_values[i].append(float('NaN'))
+    #         else:
+    #             strain_values[i].append((d0 / int(data[i][j])) - 1)
+
+    df = DataFrame(similarity_values, columns=arange(len(similarity_values[0])), index=arange(len(similarity_values)))
+    print(df)
+    fig = px.imshow(df, color_continuous_scale='turbo')
+    fig.show()
+
         
 if __name__ == "__main__":
     HEIGHT = 700
@@ -213,8 +304,7 @@ if __name__ == "__main__":
     # Text Output box
     label3 = tk.Message(frame, bg='#F3F3F3', font=('Calibri', 15), anchor='nw', justify='left', highlightthickness=0,
                         bd=0, width=1500, fg='#373737', borderwidth=2, relief="groove")
-    label3['text'] = "This program was originally designed by Aniket Patel and Aaron Barbosa \nand modified by " \
-                     "Marcus Hansen and Ainiu Wang.\n"
+    label3['text'] = "This program was designed by Marcus Hansen and Ainiu Wang.\n"
     label3.place(relx=0.1, rely=0.54, relwidth=0.8, relheight=0.32)
 
     # Entry box
@@ -234,5 +324,11 @@ if __name__ == "__main__":
                         command=lambda: start_analysis(), pady=0.02, fg='#373737', borderwidth='2',
                         relief="groove")
     button1.place(relx=0.29, rely=0.28, relwidth=0.42, relheight=0.05)
+    
+    button2 = tk.Button(frame, text='Create Similarity Heat Map', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
+                        activebackground='#D4D4D4', activeforeground='#252525',
+                        command=lambda: heat_map(), pady=0.02, fg='#373737', borderwidth='2',
+                        relief="groove")
+    button2.place(relx=0.29, rely=0.34, relwidth=0.42, relheight=0.05)
 
     root.mainloop()
