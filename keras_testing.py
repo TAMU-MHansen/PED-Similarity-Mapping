@@ -3,10 +3,10 @@ from hyperspy.api import load
 from tkinter import filedialog
 import numpy as np
 from pixstem.api import PixelatedSTEM
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageOps, ImageFilter
 from scipy.ndimage.filters import gaussian_filter
 import requests
-from scipy.ndimage import gaussian_filter
+import cv2
 
 # for loading/processing the images
 from keras.applications.vgg16 import preprocess_input
@@ -27,9 +27,12 @@ if __name__ == "__main__":
 
     def extract_features(arr, model1):
         # load the image as 224x224
+        arr = gaussian_filter(arr, 9)
         img = Image.fromarray(arr)
         img = img.convert("RGB")
         img = img.resize((224, 224))
+        # img = img.filter(ImageFilter.GaussianBlur)
+        img = ImageOps.autocontrast(img, cutoff=1)
         # convert from 'PIL.Image.Image' to numpy array
         img = np.array(img)
         # reshape the data for the model reshape(num_of_samples, dim 1, dim 2, channels)
@@ -52,6 +55,7 @@ if __name__ == "__main__":
         for j in range(50):
             # try to extract the features and update the dictionary
             image_from_arr = file.data[i][j]
+            file.data[i][j] = image_from_arr
             image_name = "img" + str(i) + "_" + str(j)
             print(image_name)
             feat = extract_features(image_from_arr, model)
@@ -67,7 +71,7 @@ if __name__ == "__main__":
     feat = feat.reshape(-1, 4096)
 
     # get the unique labels (from the flower_labels.csv)
-    unique_labels = (0, 1, 2, 3, 4)
+    unique_labels = (0, 1, 2, 3)
 
     # reduce the amount of dimensions in the feature vector
     pca = PCA(n_components=100, random_state=22)
@@ -108,11 +112,14 @@ if __name__ == "__main__":
 
     def get_mouse_xy(event):
         length = len(heatmap_arr_2d)
-        point = (int(event.x * length / 400), int(event.y * length / 400))  # get the mouse position from event
+        point = (int(event.x * length / 224), int(event.y * length / 224))  # get the mouse position from event
 
         # displays selected diffraction pattern from .blo file
-        preview_img = np.asarray(file.data[int(event.y * length / 400)][int(event.x * length / 400)])
-        preview_img = Image.fromarray(preview_img).resize((400, 400))
+        preview_img = np.asarray(file.data[int(event.y * length / 224)][int(event.x * length / 224)])
+        preview_img = gaussian_filter(preview_img, 9)
+        preview_img = Image.fromarray(preview_img).resize((224, 224))
+        # preview_img = preview_img.filter(ImageFilter.GaussianBlur)
+        preview_img = ImageOps.autocontrast(preview_img, cutoff=1)
         preview_img = ImageTk.PhotoImage(master=r, image=preview_img)
         r.preview_img = preview_img
         c2.itemconfigure(point_img, image=preview_img)
@@ -120,15 +127,15 @@ if __name__ == "__main__":
         r.update()
 
     # canvas for surface image
-    c1 = tk.Canvas(r, width=400, height=400)
+    c1 = tk.Canvas(r, width=224, height=224)
     c1.place(relx=0.07, anchor='nw')
-    tk_image = Image.fromarray(heatmap_arr_2d).resize((400, 400))
+    tk_image = Image.fromarray(heatmap_arr_2d).resize((224, 224))
     tk_image = ImageTk.PhotoImage(master=r, image=tk_image)
     c1.create_image(0, 0, anchor='nw', image=tk_image)
     c1.bind('<Button-1>', get_mouse_xy)
 
     # preview diffraction pattern
-    c2 = tk.Canvas(r, width=400, height=400)
+    c2 = tk.Canvas(r, width=224, height=224)
     c2.place(relx=0.93, anchor='ne')
     point_img = c2.create_image(0, 0, anchor='nw', image=None)
 
