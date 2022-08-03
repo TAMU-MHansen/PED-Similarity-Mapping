@@ -362,7 +362,7 @@ def create_region_map():
                     else:
                         region_map_array[y][x] = int((i + 1) * intensity_section)
 
-    # cleans up closest similarity for any missing spaces, minimum similarity is 0.70
+    # cleans up closest similarity for any missing spaces, minimum similarity is 0.75
     for y in range(len(region_map_array)):
         for x in range(len(region_map_array)):
             if region_map_array[y][x] == 0:
@@ -372,7 +372,7 @@ def create_region_map():
                     if similarity_values[i][y][x] > max_sim:
                         max_sim = similarity_values[i][y][x]
                         index = i
-                if max_sim >= 0.80:
+                if max_sim >= 0.75:
                     region_map_array[y][x] = int((index + 1) * intensity_section)
 
     region_map_image = Image.fromarray(region_map_array)
