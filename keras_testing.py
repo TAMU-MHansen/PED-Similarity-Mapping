@@ -4,7 +4,9 @@ from tkinter import filedialog
 import numpy as np
 from pixstem.api import PixelatedSTEM
 from PIL import Image, ImageTk, ImageOps, ImageFilter
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter
+import tensorflow as tf
+from multiprocessing import Pool
 import requests
 import cv2
 
@@ -21,6 +23,8 @@ from sklearn.decomposition import PCA
 
 
 if __name__ == "__main__":
+
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 
     input_file = filedialog.askopenfilename()
     file = PixelatedSTEM(load(input_file))
@@ -55,7 +59,6 @@ if __name__ == "__main__":
         for j in range(50):
             # try to extract the features and update the dictionary
             image_from_arr = file.data[i][j]
-            file.data[i][j] = image_from_arr
             image_name = "img" + str(i) + "_" + str(j)
             print(image_name)
             feat = extract_features(image_from_arr, model)
