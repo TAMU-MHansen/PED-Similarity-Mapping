@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+
+import numpy
+from PIL import Image, ImageTk, ImageOps, ImageEnhance
 import requests
 from pixstem.api import PixelatedSTEM
 import hyperspy.api as hs
@@ -9,17 +11,21 @@ import numpy as np
 from scipy.ndimage.filters import gaussian_filter
 from multiprocessing import Pool
 import tqdm
+import cv2
 
 file = None
+input_file_path = None
+
 
 # prompts file dialog for user to select file
 def load_file():
-    global file
+    global file, input_file_path
+
     label3['text'] = "Loading file...\n"
-    input_file = filedialog.askopenfilename()
+    input_file_path = filedialog.askopenfilename()
     root.update()
     try:
-        file = PixelatedSTEM(hs.load(input_file))
+        file = PixelatedSTEM(hs.load(input_file_path))
         label3['text'] = label3['text'] + "File loaded.\n"
     except ValueError:
         label3['text'] = label3['text'] + "Please select a file and try again.\n"
@@ -28,7 +34,7 @@ def load_file():
 
 
 def save_block():
-    global file
+    global file, input_file_path
 
     file_array = file.data
     # x_length = len(file_array[0])
@@ -38,6 +44,7 @@ def save_block():
     results = []
     pool = Pool(processes=None)
     # runs the gaussian denoise function on all the images in the array
+    # Processes fast but uses a lot of memory, can remove multiprocessing for reduced memory usage at the cost of speed
     for i in range(len(file_array)):
         for output in tqdm.tqdm(pool.imap_unordered(gaussian_denoise, file_array[i]), total=len(file_array[i])):
             results.append(output)
@@ -52,12 +59,19 @@ def save_block():
             i += 1
 
     stem_file_array = hs.signals.Signal2D(file_array)
-    io_plugins.blockfile.file_writer('FilteredBlock.blo', stem_file_array)
+    io_plugins.blockfile.file_writer(input_file_path[:-4] + '_GaussianFilter.blo', stem_file_array)
+    label3['text'] = label3['text'] + "Filtered file saved.\n"
 
 
 def gaussian_denoise(orig_image):
     denoise_radius = 3
     denoised_image = gaussian_filter(orig_image, denoise_radius)
+    # denoised_image = cv2.fastNlMeansDenoising(orig_image, h=denoise_radius)
+    image = Image.fromarray(denoised_image)
+    denoised_image = ImageOps.autocontrast(image, cutoff=1)
+    # enhancer = ImageEnhance.Contrast(image)
+    # denoised_image = enhancer.enhance(1)
+    denoised_image = numpy.array(denoised_image)
     return denoised_image
 
 
@@ -82,7 +96,7 @@ if __name__ == '__main__':
     label1.place(relx=0.05, rely=0.05, anchor='w')
 
     # Menu Label
-    label2 = tk.Label(frame, text='PED Similarity Mapping', bg='#FFFFFF', font=('Times New Roman', 40), fg='#373737')
+    label2 = tk.Label(frame, text='Block File Filtering and Exporting', bg='#FFFFFF', font=('Times New Roman', 40), fg='#373737')
     label2.place(relx=0.15, rely=0.1, relwidth=0.7, relheight=0.1)
 
     # Text Output box
