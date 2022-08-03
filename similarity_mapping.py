@@ -1,19 +1,23 @@
 # Framework for image similarity program
-
+import sys
 import tkinter as tk
 from hyperspy.api import load
 from tkinter import filedialog
 import numpy as np
 from numpy import arange
 from pixstem.api import PixelatedSTEM
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageOps, ImageFilter
 from scipy.ndimage.filters import gaussian_filter
 import requests
 from multiprocessing import Pool
 import tqdm
 from scipy import spatial
+from scipy.signal import argrelextrema, find_peaks
 from pandas import DataFrame
 import plotly.express as px
+import SSIM_PIL
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 # global variables
@@ -47,7 +51,7 @@ def gaussian_denoise(orig_image):
 # returns a representation of the .blo file as a 2d array that can be turned into an image
 def create_surface_img(stem_file):
     # creates equal sized # of sections to take the center of the image
-    sections = 8
+    sections = 6
     image_length = len(stem_file.data[0][0])
     section_size = image_length / sections
     section1 = int((image_length / 2) - (section_size / 2))
@@ -73,6 +77,7 @@ def create_surface_img(stem_file):
 
     surface_img_arr = np.asarray(surface_img)
     surface_img = Image.fromarray(np.asarray(surface_img), mode='L')
+    surface_img = ImageOps.autocontrast(surface_img, cutoff=1)
     surface_img.save('surface image.jpeg', format='jpeg')
 
     return surface_img_arr
@@ -94,12 +99,17 @@ def start_analysis():
     
         def get_mouse_xy(event):
             global selected_points, file
-            nonlocal surface_img_arr
-    
-            length = len(surface_img_arr)
+            nonlocal surface_img_arr, img_x, img_y
+
             point_num = len(selected_points) + 1
-            point = (int(event.x * length / 400), int(event.y * length / 400))  # get the mouse position from event
-    
+            # point = (int(event.x * img_x / 400), int(event.y * img_y / 400))  # get the mouse position from event
+            if img_x > img_y:
+                point = (int(event.x * img_x / 400), int(event.y * img_x / 400))
+            elif img_x < img_y:
+                point = (int(event.x * img_y / 400), int(event.y * img_y / 400))
+            else:
+                point = (int(event.x * img_x / 400), int(event.y * img_y / 400))
+
             # deletes the last entry line if the point hasn't been confirmed and refreshes the current point
             split_log = analysis_log['text'].split('\n')
             log = ''
@@ -116,7 +126,7 @@ def start_analysis():
             print(f"point{point_num} ", point)
     
             # displays selected diffraction pattern from .blo file
-            preview_img = np.asarray(file.data[int(event.y * length / 400)][int(event.x * length / 400)])
+            preview_img = np.asarray(file.data[point[1]][point[0]])
             preview_img = Image.fromarray(preview_img).resize((400, 400))
             preview_img = ImageTk.PhotoImage(image=preview_img)
             r.preview_img = preview_img
@@ -139,7 +149,7 @@ def start_analysis():
                 label1['text'] = label1['text'] + "Analysis complete.\n"
             else:
                 reset_points()
-    
+
         # main window
         r = tk.Toplevel(root)
         r.title('')
@@ -152,11 +162,27 @@ def start_analysis():
         f = tk.Frame(r, bg='#FFFFFF')
         f.place(relwidth=1, relheight=1)
 
-        # canvas for surface image
-        c1 = tk.Canvas(r, width=400, height=400)
-        c1.place(relx=0.07, anchor='nw')
         surface_img_arr = create_surface_img(file)
-        tk_image = Image.fromarray(surface_img_arr).resize((400, 400))
+        img_x = len(surface_img_arr[0])
+        img_y = len(surface_img_arr)
+        # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
+        if img_x > img_y:
+            tk_image = Image.fromarray(surface_img_arr).resize((400, int((img_y/img_x) * 400)))
+        elif img_x < img_y:
+            tk_image = Image.fromarray(surface_img_arr).resize((int((img_x / img_y) * 400), 400))
+        else:
+            tk_image = Image.fromarray(surface_img_arr).resize((400, 400))
+
+        # canvas for surface image
+
+        if img_x > img_y:
+            c1 = tk.Canvas(r, width=400, height=int((img_y/img_x) * 400))
+        elif img_x < img_y:
+            c1 = tk.Canvas(r, width=int((img_x / img_y) * 400), height=400)
+        else:
+            c1 = tk.Canvas(r, width=400, height=400)
+
+        c1.place(relx=0.07, anchor='nw')
         tk_image = ImageTk.PhotoImage(image=tk_image)
         c1.create_image(0, 0, anchor='nw', image=tk_image)
         c1.bind('<Button-1>', get_mouse_xy)
@@ -170,7 +196,7 @@ def start_analysis():
         analysis_log = tk.Message(f, bg='#FFFFFF', font=('Calibri', 15), anchor='nw', justify='left',
                                   highlightthickness=0, bd=0, width=canvas_width * 0.9)
         analysis_log.place(relx=0.05, rely=0.65, relwidth=0.9, relheight=0.25)
-        analysis_log['text'] = "Similarity mapping: please click on up to three points you would like to " \
+        analysis_log['text'] = "Similarity mapping: please click on points you would like to " \
                                "use to analyze the phase similarity.\n"
     
         # interactive buttons
@@ -191,7 +217,7 @@ def start_analysis():
                                    command=lambda: finalize_points(), pady=0.02, fg='#373737', borderwidth='2',
                                    relief="groove")
         analyze_button.place(relx=0.65, rely=0.88, relwidth=0.20, relheight=0.07)
-    
+        reset_points()
         r.mainloop()
         
     else:
@@ -201,41 +227,40 @@ def start_analysis():
 def analysis(points):
     global file, similarity_values
 
-    point = points[0]
+    # point = points[0]
+    similarity_values = []
+    for point in points:
+        x_length = len(file.data[0])
+        y_length = len(file.data)
+        processing_list = [[]]
+        i = 0
+        for y in range(y_length):
+            for x in range(x_length):
+                processing_list.append([])
+                processing_list[i].append(file.data[point[1]][point[0]])
+                processing_list[i].append(file.data[y][x])
+                i += 1
 
-    x_length = len(file.data[0])
-    y_length = len(file.data)
-    processing_list = [[]]
-    i = 0
-    for y in range(x_length):
-        for x in range(y_length):
-            processing_list.append([])
-            processing_list[i].append(file.data[point[1]][point[0]])
-            processing_list[i].append(file.data[y][x])
-            i += 1
+        del processing_list[-1]
 
-    del processing_list[-1]
-    # print(processing_list)
-    # print()
-    # print(len(processing_list))
-    # print(len(processing_list[0]))
-    # print(len(processing_list[0][0]))
+        results = []
+        pool = Pool(processes=None)
+        for output in tqdm.tqdm(pool.imap_unordered(ssim_similarity, processing_list), total=len(processing_list)):
+            results.append(output)
+            pass
+        pool.close()
 
-    results = []
-    pool = Pool(processes=None)
-    for output in tqdm.tqdm(pool.imap_unordered(cosine_similarity, processing_list),
-                            total=len(processing_list)):
-        results.append(output)
-        pass
-    pool.close()
+        similarity = np.zeros((y_length, x_length))
+        i = 0
+        for y in range(y_length):
+            for x in range(x_length):
+                # if results[i] >= 0.99:
+                #     similarity[y][x] = float('NaN')
+                # else:
+                similarity[y][x] = results[i]
+                i += 1
 
-    similarity_values = np.zeros((y_length, x_length))
-    i = 0
-    for y in range(y_length):
-        for x in range(x_length):
-            similarity_values[y][x] = results[i]
-            i += 1
-
+        similarity_values.append(similarity)
     print(similarity_values)
 
 
@@ -257,24 +282,103 @@ def euclidean_similarity(img_arrays):
     return similarity
 
 
+def ssim_similarity(img_arrays):
+    array1 = Image.fromarray(img_arrays[0])
+    array2 = Image.fromarray(img_arrays[1])
+    similarity = SSIM_PIL.compare_ssim(array1, array2)
+    return similarity
+
+
 def heat_map():
     global similarity_values
-    data = similarity_values.copy()
-    # d0 = float(input_distance)
 
-    # strain_values = []
-    # for i in range(len(data)):
-    #     strain_values.append([])
-    #     for j in range(len(data[i])):
-    #         if data[i][j] == 0:
-    #             strain_values[i].append(float('NaN'))
-    #         else:
-    #             strain_values[i].append((d0 / int(data[i][j])) - 1)
+    for point_values in similarity_values:
+        df = DataFrame(point_values, columns=arange(len(point_values[0])), index=arange(len(point_values)))
+        print(df)
+        fig = px.imshow(df, color_continuous_scale='turbo')
+        fig.show()
 
-    df = DataFrame(similarity_values, columns=arange(len(similarity_values[0])), index=arange(len(similarity_values)))
-    print(df)
-    fig = px.imshow(df, color_continuous_scale='turbo')
-    fig.show()
+
+# creates a histogram pop-up UI
+def create_histogram():
+    global similarity_values
+
+    if file is None:
+        label1['text'] = "Please load a file before creating a histogram.\n"
+    elif similarity_values is None:
+        label1['text'] = "Please analyze the file before creating a histogram.\n"
+    else:
+        root.update()
+        for p in range(len(similarity_values)):
+            flattened_similarity = np.array(similarity_values[p]).flat
+            for i in range(len(flattened_similarity)):
+                if flattened_similarity[i] == 0:
+                    flattened_similarity[i] = float('NaN')
+
+            fig, a = plt.subplots(figsize=(6, 5.5))
+            plt.xlabel('Distance from center peak', fontsize=10)
+            plt.ylabel('Counts', fontsize=10)
+            plt.title(f'Distance Counts: point{p+1}', fontsize=10)
+
+            plt.hist(flattened_similarity, bins=50)
+
+            bar_chart_window = tk.Toplevel(root)
+            bar_chart_window.geometry('600x600')
+            chart_type = FigureCanvasTkAgg(plt.gcf(), bar_chart_window)
+            chart_type.draw()
+            chart_type.get_tk_widget().place(relx=0.0, rely=0.0, relwidth=1)
+
+
+def create_region_map():
+    global similarity_values
+
+    points = len(similarity_values)
+    intensity_section = 255 / (points + 2)
+    region_map_array = np.zeros(similarity_values[0].shape)
+    print(np.zeros(similarity_values[0].shape))
+    bins = 100
+    for i in range(points):
+        percentile = np.percentile(similarity_values[i], 95)
+        std = np.std(similarity_values[i])
+        print(percentile - (3*std/4))
+        histogram = plt.hist(similarity_values[i].flat, bins=100)
+        min_height = (similarity_values[i].shape[0] * similarity_values[i].shape[1]) / (bins * 50)
+        print(similarity_values[i].shape[0] * similarity_values[i].shape[1])
+        print(min_height)
+        hist_peaks = find_peaks(histogram[0], height=min_height)
+        print(histogram[0])
+        print(histogram[1])
+        print(hist_peaks)
+        print(hist_peaks[0][-1])
+        min_similarity = histogram[1][hist_peaks[0][-1]] * 0.95
+        print(min_similarity)
+        print(std)
+        print()
+        for y in range(len(similarity_values[i])):
+            for x in range(len(similarity_values[i][y])):
+                if similarity_values[i][y][x] >= min_similarity:
+                    if region_map_array[y][x] != 0:
+                        region_map_array[y][x] = int((region_map_array[y][x] + ((i + 1) * intensity_section)) / 2)
+                    else:
+                        region_map_array[y][x] = int((i + 1) * intensity_section)
+
+    # cleans up closest similarity for any missing spaces, minimum similarity is 0.70
+    for y in range(len(region_map_array)):
+        for x in range(len(region_map_array)):
+            if region_map_array[y][x] == 0:
+                max_sim = 0
+                index = 0
+                for i in range(len(similarity_values)):
+                    if similarity_values[i][y][x] > max_sim:
+                        max_sim = similarity_values[i][y][x]
+                        index = i
+                if max_sim >= 0.80:
+                    region_map_array[y][x] = int((index + 1) * intensity_section)
+
+    region_map_image = Image.fromarray(region_map_array)
+    region_map_image = region_map_image.convert('L')
+    region_map_image.show()
+    region_map_image.save('region_map.png')
 
         
 if __name__ == "__main__":
@@ -330,5 +434,17 @@ if __name__ == "__main__":
                         command=lambda: heat_map(), pady=0.02, fg='#373737', borderwidth='2',
                         relief="groove")
     button2.place(relx=0.29, rely=0.34, relwidth=0.42, relheight=0.05)
+
+    button3 = tk.Button(frame, text='Create Similarity Histogram', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
+                        activebackground='#D4D4D4', activeforeground='#252525',
+                        command=lambda: create_histogram(), pady=0.02, fg='#373737', borderwidth='2',
+                        relief="groove")
+    button3.place(relx=0.29, rely=0.40, relwidth=0.42, relheight=0.05)
+
+    button4 = tk.Button(frame, text='Create Similarity Region Map', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
+                        activebackground='#D4D4D4', activeforeground='#252525',
+                        command=lambda: create_region_map(), pady=0.02, fg='#373737', borderwidth='2',
+                        relief="groove")
+    button4.place(relx=0.29, rely=0.46, relwidth=0.42, relheight=0.05)
 
     root.mainloop()
