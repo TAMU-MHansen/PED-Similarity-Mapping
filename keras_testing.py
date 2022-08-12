@@ -8,6 +8,7 @@ from pixstem.api import PixelatedSTEM
 from PIL import Image, ImageTk, ImageOps, ImageFilter
 from scipy.ndimage import gaussian_filter
 from math import floor
+import tqdm
 import tensorflow as tf
 from multiprocessing import Pool
 import requests
@@ -59,7 +60,7 @@ def start_analysis():
         # prepare image for model
         img_x = preprocess_input(reshaped_img)
         # get the feature vector
-        features = model1.predict(img_x, use_multiprocessing=True)
+        features = model1.predict(img_x, use_multiprocessing=True, verbose=0)
         return features
 
     model = VGG16()
@@ -68,14 +69,16 @@ def start_analysis():
     data = {}
 
     # loop through each image in the dataset
-    for i in range(len(file.data)):
-        for j in range(len(file.data[0])):
-            # try to extract the features and update the dictionary
-            image_from_arr = file.data[i][j]
-            image_name = "img" + str(i) + "_" + str(j)
-            print(image_name)
-            feat = extract_features(image_from_arr, model)
-            data[image_name] = feat
+    with tqdm.tqdm(total=len(file.data)*len(file.data[0])) as pbar:
+        for i in range(len(file.data)):
+            for j in range(len(file.data[0])):
+                # try to extract the features and update the dictionary
+                image_from_arr = file.data[i][j]
+                image_name = "img" + str(i) + "_" + str(j)
+                # print(image_name)
+                feat = extract_features(image_from_arr, model)
+                data[image_name] = feat
+                pbar.update(1)
 
     # get a list of the filenames
     filenames = np.array(list(data.keys()))
