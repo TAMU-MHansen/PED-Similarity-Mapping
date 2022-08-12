@@ -1,10 +1,13 @@
-import tkinter as tk
 from hyperspy.api import load
+import tkinter as tk
 from tkinter import filedialog
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 from pixstem.api import PixelatedSTEM
 from PIL import Image, ImageTk, ImageOps, ImageFilter
 from scipy.ndimage import gaussian_filter
+from math import floor
 import tensorflow as tf
 from multiprocessing import Pool
 import requests
@@ -13,7 +16,7 @@ from keras.applications.vgg16 import preprocess_input
 from keras.applications.vgg16 import VGG16
 from keras.models import Model
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
+from sklearn.decomposition import KernelPCA
 
 file = None
 
@@ -40,9 +43,10 @@ def start_analysis():
     label_output['text'] = "Starting analysis. This may take a while.\n"
     r.update()
 
+    # generate feature vectors for all images in blockfile
     def extract_features(arr, model1):
         # load the image as 224x224
-        arr = gaussian_filter(arr, 9)
+        arr = gaussian_filter(arr, 2*floor((int(round(len(arr)/64.0)))/2)+1)
         img = Image.fromarray(arr)
         img = img.convert("RGB")
         img = img.resize((224, 224))
@@ -83,25 +87,25 @@ def start_analysis():
     feat = feat.reshape(-1, 4096)
 
     # reduce the amount of dimensions in the feature vector
-    pca = PCA(n_components=100, random_state=22)
+    pca = KernelPCA(n_components=100, random_state=22)
     pca.fit(feat)
     x = pca.transform(feat)
 
-    """
-    # k-means clustering
+    ####################################################################################################################
+    # get statistics for k-means clustering
     inertia_list = []
     max_k = 10
-    k_range = range(1, max_k + 1)
-    for k in k_range:
+    k_range = list(range(1, max_k + 1))
+    for k_val in k_range:
         # cluster feature vectors
-        kmeans = KMeans(n_clusters=k, random_state=22)
-        kmeans.fit(x)
-        inertia_list.append(kmeans.inertia_)
+        kmeans1 = KMeans(n_clusters=k_val, random_state=22)
+        kmeans1.fit(x)
+        inertia_list.append(kmeans1.inertia_)
 
     print("Inertia list: ", inertia_list)
 
     # automatic k detection using elbow method and distance calculation
-    distances = []
+    """distances = []
     for i in range(max_k):
         p1 = np.array([1, inertia_list[0]])  # line starting point
         p2 = np.array([max_k, inertia_list[max_k - 1]])  # line end point
@@ -113,20 +117,26 @@ def start_analysis():
     auto_k_value = distances.index(max(distances)) + 1
     print(str(auto_k_value))
     kmeans = KMeans(n_clusters=auto_k_value, random_state=22)
-    kmeans.fit(x)
-    """
+    kmeans.fit(x)"""
 
-    # holds the cluster id and the images { id: [images] }
-    """groups = {}
-    for filename, cluster in zip(filenames, kmeans.labels_):
-        if cluster not in groups.keys():
-            groups[cluster] = []
-            groups[cluster].append(filename)
-        else:
-            groups[cluster].append(filename)
+    # create new window showing elbow graph of k value vs. inertia
+    fig, a = plt.subplots(figsize=(6, 5.5))
+    x_val = k_range
+    y_val = inertia_list
 
-        print(groups)"""
+    plt.plot(x_val, y_val)
+    plt.xlabel('K value')
+    plt.ylabel('Inertia')
+    plt.title('Elbow Graph')
 
+    elbow_window = tk.Toplevel(r)
+    elbow_window.geometry('600x600')
+    chart_type = FigureCanvasTkAgg(plt.gcf(), elbow_window)
+    chart_type.draw()
+    chart_type.get_tk_widget().place(relx=0.0, rely=0.0, relwidth=1)
+
+    ####################################################################################################################
+    # analysis window
     r1 = tk.Toplevel(r)
     r1.title('')
 
@@ -146,6 +156,7 @@ def start_analysis():
 
     heatmap_length = 0
 
+    # update similarity map after new k value is entered
     def update_map(event):
         nonlocal heatmap_length
         k = int(entry.get())
@@ -173,6 +184,7 @@ def start_analysis():
     entry.place(relx=0.4, rely=0.8, relwidth=0.2, relheight=0.08)
     entry.bind("<Return>", update_map)
 
+    # display diffraction pattern in the blockfile selected via cursor
     def get_mouse_xy(event):
         nonlocal heatmap_length
         length = heatmap_length
@@ -181,7 +193,7 @@ def start_analysis():
 
             # displays selected diffraction pattern from .blo file
             preview_img = np.asarray(file.data[int(event.y * length / 400)][int(event.x * length / 400)])
-            preview_img = gaussian_filter(preview_img, 9)
+            preview_img = gaussian_filter(preview_img, 2*floor((int(round(len(preview_img)/64.0)))/2)+1)
             preview_img = Image.fromarray(preview_img).resize((400, 400))
             # preview_img = preview_img.filter(ImageFilter.GaussianBlur)
             preview_img = ImageOps.autocontrast(preview_img, cutoff=1)
