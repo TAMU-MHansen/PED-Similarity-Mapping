@@ -12,6 +12,7 @@ from scipy.ndimage.filters import gaussian_filter
 from multiprocessing import Pool
 import tqdm
 from skimage.restoration import denoise_wavelet, denoise_bilateral, denoise_tv_bregman, denoise_tv_chambolle
+from cv2_rolling_ball import subtract_background_rolling_ball
 
 # declaring global variables used between functions
 file = None
@@ -78,21 +79,30 @@ def multiprocessing_filter(data):
     filter_type = data[1][0]
     radius = data[1][1]
     gamma = data[1][2]
+    post_filter_type = data[1][4]
+    post_radius = data[1][5]
+
     # checks if auto contrast is applied to the data and assigns variables as needed
     if data[1][3]:
         lower = data[1][3][0]
         upper = data[1][3][1]
     img_array = data[0]
+
     # processes the image data using the passed parameters
     img_array = filter_method(img_array, filter_type, radius)
+
     # post filter gamma correction
     if gamma != 1:
         img_array = gamma_correction(img_array, gamma)
+
     # post filter and gamma auto contrasting if the parameters exist
     if data[1][3]:
         pil_img = Image.fromarray(img_array)
         img_array = ImageOps.autocontrast(pil_img, cutoff=(lower, upper))
-        img_array = np.array(img_array, dtype='unit8')
+        img_array = np.array(img_array, dtype='uint8')
+
+    img_array = filter_method(img_array, post_filter_type, post_radius)
+
     return img_array
 
 
@@ -121,7 +131,18 @@ def filter_method(image, denoise_method, radius):
         filtered_image = np.array(denoise_bilateral(image)*255, dtype='uint8')
     elif denoise_method == 'Denoise Wavelet':
         filtered_image = np.array(denoise_wavelet(image, rescale_sigma=True)*255, dtype='uint8')
+    elif denoise_method == 'Rolling Ball Correction':
+        filtered_image, background = np.array(subtract_background_rolling_ball(image, radius, light_background=False,
+                                                                               use_paraboloid=False, do_presmooth=True))
+    elif denoise_method == 'CLAHE':
+        filtered_image = np.array(clahe_normalization(image, radius))
     return filtered_image
+
+
+def clahe_normalization(image, radius):
+    clahe = cv2.createCLAHE(clipLimit=radius, tileGridSize=(4, 4))
+    image = clahe.apply(image)
+    return image
 
 
 # Work in Progress, doesn't do much.
@@ -166,7 +187,7 @@ def gamma_correction(image, gamma):
 
 
 # Uses OpenCV blob detection to try to find blobs in the diffraction pattern. min_area adjustable based on pattern size
-def blob_detection(image, scale=1, min_area=1000):
+def blob_detection(image, scale=1, min_area=50):
     # invert image for better detection
     image = 255 - image
     params = cv2.SimpleBlobDetector_Params()
@@ -211,6 +232,7 @@ def blob_detection(image, scale=1, min_area=1000):
 # Main Analysis window
 def start_analysis():
     global file, selected_points
+    label3['text'] = label3['text'] + "Generating surface image, this may take a few seconds\n"
     if file is not None:
         # Previews the diffraction pattern at the selected point using the given parameters
         def preview_point(point):
@@ -218,12 +240,17 @@ def start_analysis():
             radius = float(radius_value.get('1.0', 'end-1c'))
             filter_type = filter_clicked.get()
             gamma = float(gamma_value.get('1.0', 'end-1c'))
+            post_radius = float(post_radius_value.get('1.0', 'end-1c'))
+            post_filter_type = post_filter_clicked.get()
+
             # copies the point data to avoid altering the main data
             img_point = file.data[point[1]][point[0]].copy()
             filter_preview_img = filter_method(img_point, filter_type, radius)
+
             # gamma processing
             if gamma != 1.0:
                 filter_preview_img = gamma_correction(filter_preview_img, gamma)
+
             # auto contrast processing if checkbox enabled
             if cb_var.get():
                 lower = int(cv_lower.get('1.0', 'end-1c'))
@@ -231,14 +258,20 @@ def start_analysis():
                 pil_img = Image.fromarray(filter_preview_img)
                 filter_preview_img = ImageOps.autocontrast(pil_img, cutoff=(lower, upper))
                 filter_preview_img = np.array(filter_preview_img)
+
+            # secondary post filtering
+            filter_preview_img = filter_method(filter_preview_img, post_filter_type, post_radius)
+
             # blob detection if checkbox enabled
             if cp_blob.get():
                 min_area = int(min_area_value.get('1.0', 'end-1c'))
                 filter_preview_img = blob_detection(filter_preview_img, min_area=min_area)
                 filter_preview_img = Image.fromarray(filter_preview_img, mode='RGB')
+
             # If the data is an array, converts it to a PIL Image due to potential conflicts with blob RGB and Grayscale
             if isinstance(filter_preview_img, np.ndarray):
                 filter_preview_img = Image.fromarray(filter_preview_img)
+
             # resizes the image to fit the canvas and replace the current image with an updated filtered image
             filter_preview_img = filter_preview_img.resize((400, 400))
             filter_preview_img = ImageTk.PhotoImage(image=filter_preview_img)
@@ -275,13 +308,16 @@ def start_analysis():
             radius = float(radius_value.get('1.0', 'end-1c'))
             filter_type = filter_clicked.get()
             gamma = float(gamma_value.get('1.0', 'end-1c'))
+            post_radius = float(post_radius_value.get('1.0', 'end-1c'))
+            post_filter_type = post_filter_clicked.get()
+
             if cb_var.get():
                 lower = int(cv_lower.get('1.0', 'end-1c'))
                 upper = int(cv_upper.get('1.0', 'end-1c'))
             else:
                 lower = 0
                 upper = 0
-            file_array = np.zeros(np.array(file.data).shape, dtype='unit8')
+            file_array = np.zeros(np.array(file.data).shape, dtype='uint8')
             # creates a list for multiprocessing to pass each process the image and filter parameters
             multiprocessing_list = [[]]
             index = 0
@@ -289,7 +325,8 @@ def start_analysis():
                 for x in range(len(file.data[y])):
                     multiprocessing_list.append([])
                     multiprocessing_list[index].append(file.data[y][x])
-                    multiprocessing_list[index].append([filter_type, radius, gamma, (lower, upper)])
+                    multiprocessing_list[index].append([filter_type, radius, gamma, (lower, upper), post_filter_type,
+                                                        post_radius])
                     index += 1
             del multiprocessing_list[-1]
             results = []
@@ -297,7 +334,8 @@ def start_analysis():
             # runs the desired filtering method on all the images in the array
             # Processes fast but uses a lot of memory, can remove multiprocessing for reduced memory usage at the
             # cost of speed
-            for output in tqdm.tqdm(pool.imap_unordered(multiprocessing_filter, multiprocessing_list)):
+            for output in tqdm.tqdm(pool.imap_unordered(multiprocessing_filter, multiprocessing_list),
+                                    total=len(multiprocessing_list)):
                 results.append(output)
                 pass
             pool.close()
@@ -308,7 +346,6 @@ def start_analysis():
                 for col in range(len(file_array[row])):
                     file_array[row][col] = results[i]
                     i += 1
-            print(file_array)
             stem_file_array = hs.signals.Signal2D(file_array)
             # saves the file with the original name plus suffixes based on the user parameters
             io_plugins.blockfile.file_writer(input_file_path[:-4] + f'_{filter_type}_r{radius}_g{gamma}_ac({lower},'
@@ -390,7 +427,8 @@ def start_analysis():
         filter_label = tk.Label(f, text='Filtering Method', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         filter_label.place(relx=0.05, rely=0.60)
         filter_options = ['None', 'Gaussian', 'Non Local Means', 'Custom Filter 1', 'Custom Filter 2',
-                          'Denoise TV Chambolle', 'Denoise TV Bregman', 'Denoise Bilateral', 'Denoise Wavelet']
+                          'Denoise TV Chambolle', 'Denoise TV Bregman', 'Denoise Bilateral', 'Denoise Wavelet'
+                          , 'Rolling Ball Correction', 'CLAHE']
         filter_clicked = tk.StringVar()
         filter_clicked.set(filter_options[0])
         filter_dropdown = tk.OptionMenu(f, filter_clicked, *filter_options)
@@ -431,7 +469,20 @@ def start_analysis():
         min_area_label.place(relx=0.55, rely=0.65)
         min_area_value = tk.Text(f, bg='#FFFFFF', font=('Calibri', 20), fg='#373737', wrap='none')
         min_area_value.place(relx=0.70, rely=0.65, relwidth=0.05, relheight=0.05)
-        min_area_value.insert('1.0', '1000')
+        min_area_value.insert('1.0', '50')
+
+        post_filter_label = tk.Label(f, text='Post Filtering Method', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
+        post_filter_label.place(relx=0.38, rely=0.70)
+        post_filter_clicked = tk.StringVar()
+        post_filter_clicked.set(filter_options[0])
+        post_filter_dropdown = tk.OptionMenu(f, post_filter_clicked, *filter_options)
+        post_filter_dropdown.place(relx=0.60, rely=0.70, relwidth=0.14, relheight=0.05)
+
+        post_radius_text = tk.Label(f, text='Post Filtering Radius', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
+        post_radius_text.place(relx=0.38, rely=0.75)
+        post_radius_value = tk.Text(f, bg='#FFFFFF', font=('Calibri', 20), fg='#373737', wrap='none')
+        post_radius_value.place(relx=0.60, rely=0.75, relwidth=0.14, relheight=0.05)
+        post_radius_value.insert('1.0', '3')
 
         r.mainloop()
 
@@ -452,12 +503,15 @@ if __name__ == "__main__":
     frame.place(relwidth=1, relheight=1)
 
     # TAMU MSEN logo
-    url = 'https://github.com/TAMU-Xie-Group/PED-Strain-Mapping/blob/main/msen.png?raw=true'
-    msen_image = Image.open(requests.get(url, stream=True).raw)
-    msen_image = msen_image.resize((200, 40))
-    msen_image = ImageTk.PhotoImage(msen_image)
-    label1 = tk.Label(frame, image=msen_image, bg='#FFFFFF')
-    label1.place(relx=0.05, rely=0.05, anchor='w')
+    try:
+        url = 'https://github.com/TAMU-Xie-Group/PED-Strain-Mapping/blob/main/msen.png?raw=true'
+        msen_image = Image.open(requests.get(url, stream=True).raw)
+        msen_image = msen_image.resize((200, 40))
+        msen_image = ImageTk.PhotoImage(msen_image)
+        label1 = tk.Label(frame, image=msen_image, bg='#FFFFFF')
+        label1.place(relx=0.05, rely=0.05, anchor='w')
+    except:
+        print('Error: no internet connection for TAMU MSEN logo')
 
     # Menu Label
     label2 = tk.Label(frame, text='Block File Filtering', bg='#FFFFFF', font=('Times New Roman', 40), fg='#373737')
