@@ -9,9 +9,13 @@ from hyperspy.api import load
 import hyperspy.api as hs
 from hyperspy import io_plugins
 from scipy.ndimage.filters import gaussian_filter
+from scipy.signal import medfilt
 from multiprocessing import Pool
 import tqdm
 from skimage.restoration import denoise_wavelet, denoise_bilateral, denoise_tv_bregman, denoise_tv_chambolle
+from skimage import exposure
+from skimage.morphology import reconstruction, ball, disk
+from skimage.filters import rank
 from cv2_rolling_ball import subtract_background_rolling_ball
 
 # declaring global variables used between functions
@@ -37,18 +41,18 @@ def load_file():
         label3['text'] = label3['text'] + "Error loading. Please check the file path and try again.\n"
 
 
-# creates the surface image to navigate the dataset
-def create_surface_img(stem_file):
+# creates the virtual brightfield image to navigate the dataset
+def create_brightfield_image(stem_file):
     # creates equal sized # of sections to take the center of the image
-    sections = 6
+    sections = 2
     image_length = len(stem_file.data[0][0])
     section_size = image_length / sections
     section1 = int((image_length / 2) - (section_size / 2))
     section2 = int((image_length / 2) + (section_size / 2))
 
-    # Creates the surface image by slicing the center section of all images in the block file and averaging it for
+    # Creates the brightfield image by slicing the center section of all images in the block file and averaging it for
     # their respective pixel value in the 4D array.
-    surface_img = [[]]
+    brightfield_img = [[]]
     temp_array = None
     for i in tqdm.tqdm(range(len(stem_file.data))):
         for j in range(len(stem_file.data[i])):
@@ -63,15 +67,16 @@ def create_surface_img(stem_file):
             for r in range(len(temp_slice)):
                 temp_array = temp_slice[r][section1:section2]
 
-            # takes the average value of the pixels in the slice as adds them to an array that will be the surface image
-            surface_img[i].append(int(np.round(np.mean(np.asarray(temp_array)))))
+            # takes the average value of the pixels in the slice as adds them to the brightfield image
+            brightfield_img[i].append(int(np.round(np.mean(np.asarray(temp_array)))))
         if i != len(stem_file.data) - 1:
-            surface_img.append([])
-    surface_img = np.array(surface_img, dtype='uint8')
-    surface_img = Image.fromarray(surface_img)
-    surface_img_arr = np.array(surface_img)
-    surface_img.save('surface image.jpeg', format='jpeg')
-    return surface_img_arr
+            brightfield_img.append([])
+    brightfield_img = np.array(brightfield_img, dtype='uint8')
+    brightfield_img = 255 - brightfield_img
+    brightfield_img = Image.fromarray(brightfield_img)
+    brightfield_img_arr = np.array(brightfield_img)
+    brightfield_img.save('virtual brightfield image.jpeg', format='jpeg')
+    return brightfield_img_arr
 
 
 # function optimized for multiprocessing, given a data variable with an image and processing parameters in a list
@@ -91,10 +96,6 @@ def multiprocessing_filter(data):
     # processes the image data using the passed parameters
     img_array = filter_method(img_array, filter_type, radius)
 
-    # post filter gamma correction
-    if gamma != 1:
-        img_array = gamma_correction(img_array, gamma)
-
     # post filter and gamma auto contrasting if the parameters exist
     if data[1][3]:
         pil_img = Image.fromarray(img_array)
@@ -102,6 +103,10 @@ def multiprocessing_filter(data):
         img_array = np.array(img_array, dtype='uint8')
 
     img_array = filter_method(img_array, post_filter_type, post_radius)
+
+    # post filter gamma correction
+    if gamma != 1:
+        img_array = gamma_correction(img_array, gamma)
 
     return img_array
 
@@ -112,31 +117,67 @@ def filter_method(image, denoise_method, radius):
     filtered_image = image
     if denoise_method == 'None':
         filtered_image = image
-    elif denoise_method == 'Custom Filter 1':
-        filtered_image = custom_filter1(image)
-    elif denoise_method == 'Custom Filter 2':
-        radius = int(radius)
-        filtered_image = custom_filter2(image, radius)
     elif denoise_method == 'Gaussian':
         radius = int(radius)
         filtered_image = gaussian_filter(image, radius)
     elif denoise_method == 'Non Local Means':
         radius = int(radius)
         filtered_image = cv2.fastNlMeansDenoising(image, h=radius)
-    elif denoise_method == 'Denoise TV Chambolle':
-        filtered_image = np.array(denoise_tv_chambolle(image, weight=radius)*255, dtype='uint8')
-    elif denoise_method == 'Denoise TV Bregman':
-        filtered_image = np.array(denoise_tv_bregman(image, weight=radius)*255, dtype='uint8')
-    elif denoise_method == 'Denoise Bilateral':
-        filtered_image = np.array(denoise_bilateral(image)*255, dtype='uint8')
-    elif denoise_method == 'Denoise Wavelet':
-        filtered_image = np.array(denoise_wavelet(image, rescale_sigma=True)*255, dtype='uint8')
     elif denoise_method == 'Rolling Ball Correction':
         filtered_image, background = np.array(subtract_background_rolling_ball(image, radius, light_background=False,
                                                                                use_paraboloid=False, do_presmooth=True))
     elif denoise_method == 'CLAHE':
         filtered_image = np.array(clahe_normalization(image, radius))
+    elif denoise_method == 'Regional Maxima':
+        filtered_image = np.array(regional_maxima(image, radius), dtype='uint8')
+    elif denoise_method == 'Adaptive Histogram Equalization':
+        filtered_image = np.array(exposure.equalize_adapthist(image, clip_limit=radius)*255, dtype='uint8')
+    elif denoise_method == 'Local Histogram Equalization':
+        neighborhood = disk(radius)
+        filtered_image = np.array(rank.equalize(image, footprint=neighborhood), dtype='uint8')
+    elif denoise_method == 'Global Histogram Equalization':
+        filtered_image = np.array(exposure.equalize_hist(image)*255, dtype='uint8')
+    elif denoise_method == 'Centered Mask':
+        filtered_image = centered_mask(image, radius)
+    elif denoise_method == 'Normalize':
+        filtered_image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
+    elif denoise_method == 'Contrast Stretching':
+        p2, pr = np.percentile(image, (2, radius))
+        filtered_image = np.array(exposure.rescale_intensity(image, in_range=(p2, pr)), dtype='uint8')
+    elif denoise_method == 'Median':
+        radius = int(radius)
+        filtered_image = medfilt(image, radius)
     return filtered_image
+
+
+# def image_normalization(image, new_max):
+#     img_min = np.min(image)
+#     print(img_min)
+#     img_max = np.max(image)
+#     print(img_max)
+#     new_image = np.zeros(image.shape)
+#     for row in range(len(image)):
+#         for col in range(len(image[row])):
+#             if image[row][col] > 200:
+#                 print(image[row][col])
+#             new_image[row][col] = (image[row][col] - img_min) * (new_max / (img_max-img_min))
+#     return new_image
+
+
+def centered_mask(image, radius):
+    center = (int(len(image[0])/2), int(len(image)/2))
+    mask = np.zeros(image.shape, dtype=np.uint8)
+    mask = cv2.circle(mask, center, int(radius), (255, 255, 255), -1)
+    image = cv2.bitwise_and(image, mask)
+    return image
+
+
+def regional_maxima(image, h):
+    seed = image - h
+    mask = image
+    dilated = reconstruction(seed, mask, method='dilation')
+    image = image - dilated
+    return image
 
 
 def clahe_normalization(image, radius):
@@ -145,32 +186,31 @@ def clahe_normalization(image, radius):
     return image
 
 
-# Work in Progress, doesn't do much.
-def custom_filter1(image):
-    avg_intensity = int(np.average(image))
-    intensity_multiplier = (0.5, 1.0)  # outside, inside
-    y_mid = int(len(image) / 2)
-    x_mid = int(len(image[y_mid]) / 2)
-    for y in range(len(image)):
-        for x in range(len(image[y])):
-            if image[y][x] < avg_intensity:
-                image[y][x] = 0
+# # Work in Progress, doesn't do much.
+# def custom_filter1(image):
+#     avg_intensity = int(np.average(image))
+#     intensity_multiplier = (0.5, 1.0)  # outside, inside
+#     y_mid = int(len(image) / 2)
+#     x_mid = int(len(image[y_mid]) / 2)
+#     for y in range(len(image)):
+#         for x in range(len(image[y])):
+#             if image[y][x] < avg_intensity:
+#                 image[y][x] = 0
+#     return image
 
-    return image
 
-
-# Decent on super noisy images, still a WIP
-def custom_filter2(image, radius):
-    check_radius = radius
-    for y in range(check_radius, len(image)-check_radius):
-        for x in range(check_radius, len(image[y])-check_radius):
-            radius_area = image[(y-check_radius):(y+check_radius+1), (x-check_radius):(x+check_radius+1)]
-            radius_area = radius_area.flatten()
-            np.delete(radius_area, int(len(radius_area)/2))
-            area_avg = np.average(radius_area)
-            if image[y][x] >= area_avg*1.25:
-                image[y][x] = int(area_avg) * 0.5
-    return image
+# # Decent on super noisy images, still a WIP
+# def custom_filter2(image, radius):
+#     check_radius = radius
+#     for y in range(check_radius, len(image)-check_radius):
+#         for x in range(check_radius, len(image[y])-check_radius):
+#             radius_area = image[(y-check_radius):(y+check_radius+1), (x-check_radius):(x+check_radius+1)]
+#             radius_area = radius_area.flatten()
+#             np.delete(radius_area, int(len(radius_area)/2))
+#             area_avg = np.average(radius_area)
+#             if image[y][x] >= area_avg*1.25:
+#                 image[y][x] = int(area_avg) * 0.5
+#     return image
 
 
 # Adjusts the given image based on the passed gamma value.
@@ -232,11 +272,13 @@ def blob_detection(image, scale=1, min_area=50):
 # Main Analysis window
 def start_analysis():
     global file, selected_points
-    label3['text'] = label3['text'] + "Generating surface image, this may take a few seconds\n"
+    label3['text'] = label3['text'] + "Generating virtual bright-field image, this may take a few seconds\n"
+    frame.update()
     if file is not None:
         # Previews the diffraction pattern at the selected point using the given parameters
         def preview_point(point):
             # assigning user parameters to variables
+            print(point)
             radius = float(radius_value.get('1.0', 'end-1c'))
             filter_type = filter_clicked.get()
             gamma = float(gamma_value.get('1.0', 'end-1c'))
@@ -246,10 +288,6 @@ def start_analysis():
             # copies the point data to avoid altering the main data
             img_point = file.data[point[1]][point[0]].copy()
             filter_preview_img = filter_method(img_point, filter_type, radius)
-
-            # gamma processing
-            if gamma != 1.0:
-                filter_preview_img = gamma_correction(filter_preview_img, gamma)
 
             # auto contrast processing if checkbox enabled
             if cb_var.get():
@@ -261,6 +299,10 @@ def start_analysis():
 
             # secondary post filtering
             filter_preview_img = filter_method(filter_preview_img, post_filter_type, post_radius)
+
+            # gamma processing
+            if gamma != 1.0:
+                filter_preview_img = gamma_correction(filter_preview_img, gamma)
 
             # blob detection if checkbox enabled
             if cp_blob.get():
@@ -280,7 +322,7 @@ def start_analysis():
 
         def get_mouse_xy(event):
             global selected_points, file
-            nonlocal surface_img_arr, img_x, img_y
+            nonlocal brightfield_img_arr, img_x, img_y
 
             # get the mouse click position depending on the image shape due to resize scaling in rectangular images
             if img_x > img_y:
@@ -341,15 +383,23 @@ def start_analysis():
             pool.close()
 
             i = 0
-            # reshapes the array back into the original shape from the flattened resutls
+            # reshapes the array back into the original shape from the flattened results
             for row in range(len(file_array)):
                 for col in range(len(file_array[row])):
                     file_array[row][col] = results[i]
                     i += 1
             stem_file_array = hs.signals.Signal2D(file_array)
             # saves the file with the original name plus suffixes based on the user parameters
-            io_plugins.blockfile.file_writer(input_file_path[:-4] + f'_{filter_type}_r{radius}_g{gamma}_ac({lower},'
-                                                                    f'{upper})' + '.blo', stem_file_array)
+            file_name = input_file_path[:-4]
+            if filter_type != 'None':
+                file_name = file_name + f'_{filter_type}_r{radius}'
+            if gamma != 1:
+                file_name = file_name + f'_g{gamma}'
+            if lower & upper != 0:
+                file_name = file_name + f'_ac({lower},{upper})'
+            if post_filter_type != 'None':
+                file_name = file_name + f'_{post_filter_type}_r{post_radius}'
+            io_plugins.blockfile.file_writer(file_name + '.blo', stem_file_array)
             label3['text'] = label3['text'] + "Filtered file saved.\n"
             return
 
@@ -365,18 +415,18 @@ def start_analysis():
         f = tk.Frame(r, bg='#FFFFFF')
         f.place(relwidth=1, relheight=1)
 
-        surface_img_arr = create_surface_img(file)
-        img_x = len(surface_img_arr[0])
-        img_y = len(surface_img_arr)
-        # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
+        brightfield_img_arr = create_brightfield_image(file)
+        img_x = len(brightfield_img_arr[0])
+        img_y = len(brightfield_img_arr)
+        # adjusts the image size to scale up to 400 based on the aspect ratio of the virtual bright-field image.
         if img_x > img_y:
-            tk_image = Image.fromarray(surface_img_arr).resize((400, int((img_y / img_x) * 400)))
+            tk_image = Image.fromarray(brightfield_img_arr).resize((400, int((img_y / img_x) * 400)))
         elif img_x < img_y:
-            tk_image = Image.fromarray(surface_img_arr).resize((int((img_x / img_y) * 400), 400))
+            tk_image = Image.fromarray(brightfield_img_arr).resize((int((img_x / img_y) * 400), 400))
         else:
-            tk_image = Image.fromarray(surface_img_arr).resize((400, 400))
+            tk_image = Image.fromarray(brightfield_img_arr).resize((400, 400))
 
-        # canvas for surface image
+        # canvas for the virtual brightfield image
 
         if img_x > img_y:
             c1 = tk.Canvas(r, width=400, height=int((img_y / img_x) * 400))
@@ -400,8 +450,8 @@ def start_analysis():
         filtered_img_preview = filtered_canvas.create_image(0, 0, anchor='nw', image=None)
 
         # Image texts
-        surface_text = tk.Label(f, text='Surface Image', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
-        surface_text.place(relx=0.13, rely=0.50)
+        brightfield_text = tk.Label(f, text='Virtual Bright-Field Image', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
+        brightfield_text.place(relx=0.09, rely=0.50)
 
         orig_text = tk.Label(f, text='Original Image', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         orig_text.place(relx=0.45, rely=0.50)
@@ -426,15 +476,16 @@ def start_analysis():
         # filtering parameters buttons, labels, and text boxes
         filter_label = tk.Label(f, text='Filtering Method', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         filter_label.place(relx=0.05, rely=0.60)
-        filter_options = ['None', 'Gaussian', 'Non Local Means', 'Custom Filter 1', 'Custom Filter 2',
-                          'Denoise TV Chambolle', 'Denoise TV Bregman', 'Denoise Bilateral', 'Denoise Wavelet'
-                          , 'Rolling Ball Correction', 'CLAHE']
+        filter_options = ['None', 'Gaussian', 'Non Local Means', 'Rolling Ball Correction', 'CLAHE',
+                          'Adaptive Histogram Equalization', 'Regional Maxima', 'Local Histogram Equalization',
+                          'Global Histogram Equalization', 'Centered Mask', 'Normalize', 'Median',
+                          'Contrast Stretching']
         filter_clicked = tk.StringVar()
         filter_clicked.set(filter_options[0])
         filter_dropdown = tk.OptionMenu(f, filter_clicked, *filter_options)
         filter_dropdown.place(relx=0.18, rely=0.60, relwidth=0.14, relheight=0.05)
 
-        radius_text = tk.Label(f, text='Filtering Radius', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
+        radius_text = tk.Label(f, text='Filtering Value', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         radius_text.place(relx=0.05, rely=0.67)
         radius_value = tk.Text(f, bg='#FFFFFF', font=('Calibri', 20), fg='#373737', wrap='none')
         radius_value.place(relx=0.18, rely=0.67, relwidth=0.14, relheight=0.05)
@@ -478,7 +529,7 @@ def start_analysis():
         post_filter_dropdown = tk.OptionMenu(f, post_filter_clicked, *filter_options)
         post_filter_dropdown.place(relx=0.60, rely=0.70, relwidth=0.14, relheight=0.05)
 
-        post_radius_text = tk.Label(f, text='Post Filtering Radius', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
+        post_radius_text = tk.Label(f, text='Post Filtering Value', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         post_radius_text.place(relx=0.38, rely=0.75)
         post_radius_value = tk.Text(f, bg='#FFFFFF', font=('Calibri', 20), fg='#373737', wrap='none')
         post_radius_value.place(relx=0.60, rely=0.75, relwidth=0.14, relheight=0.05)

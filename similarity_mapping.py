@@ -1,5 +1,6 @@
 # Framework for image similarity program
 import sys
+import os
 import tkinter as tk
 from hyperspy.api import load
 from tkinter import filedialog
@@ -18,6 +19,7 @@ import plotly.express as px
 import SSIM_PIL
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import cv2
 
 
 # global variables
@@ -42,16 +44,19 @@ def load_file():
 
 
 # takes in an image and returns a filtered version (gaussian)
-def gaussian_denoise(orig_image):
+def denoise(orig_image):
     denoise_radius = 3
     denoised_image = gaussian_filter(orig_image, denoise_radius)
+    denoised_image = Image.fromarray(denoised_image)
+    denoised_image = ImageOps.autocontrast(denoised_image, cutoff=1)
+    denoised_image = np.array(denoised_image)
     return denoised_image
 
 
 # returns a representation of the .blo file as a 2d array that can be turned into an image
 def create_surface_img(stem_file):
     # creates equal sized # of sections to take the center of the image
-    sections = 6
+    sections = 2
     image_length = len(stem_file.data[0][0])
     section_size = image_length / sections
     section1 = int((image_length / 2) - (section_size / 2))
@@ -89,17 +94,43 @@ def start_analysis():
     if file is not None:
         def reset_points():
             global selected_points
+            nonlocal tk_img_arr, tk_image_orig, tk_img_arr_orig
             selected_points = []
+            tk_img_arr = tk_img_arr_orig
+            tk_img = ImageTk.PhotoImage(image=tk_image_orig)
+            r.tk_img = tk_img
+            c1.itemconfigure(bf_image, image=tk_img)
+            r.update()
             analysis_log['text'] = "Similarity mapping: please click on points you would like to " \
                                    "use to analyze the phase similarity.\n"
     
         def confirm_point(point):
             global selected_points
+            nonlocal surface_img_arr, tk_img_arr, tk_image
+            analysis_log['text'] = analysis_log['text'][:-1] + ' - Confirmed\n'
             selected_points.append(point)
+            tk_img_arr = np.array(tk_img_arr)
+            tk_img_arr[point[1], point[0]] = [0, 255, 0]
+            bf_x = len(tk_img_arr[0])
+            bf_y = len(tk_img_arr)
+
+            # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
+            if bf_x > bf_y:
+                tk_img = Image.fromarray(tk_img_arr).resize((400, int((bf_y / bf_x) * 400)))
+            elif bf_x < bf_y:
+                tk_img = Image.fromarray(tk_img_arr).resize((int((bf_x / bf_y) * 400), 400))
+            else:
+                tk_img = Image.fromarray(tk_img_arr).resize((400, 400))
+            tk_img = ImageTk.PhotoImage(image=tk_img)
+            r.tk_img = tk_img
+            c1.itemconfigure(bf_image, image=tk_img)
+            r.update()
+            # img = Image.fromarray(np.asarray(file.data[point[1]][point[0]]))
+            # img.save(f'x{point[1]}_y{point[0]}.png')
     
         def get_mouse_xy(event):
             global selected_points, file
-            nonlocal surface_img_arr, img_x, img_y
+            nonlocal surface_img_arr, img_x, img_y, tk_img_arr, prev_point
 
             point_num = len(selected_points) + 1
             # point = (int(event.x * img_x / 400), int(event.y * img_y / 400))  # get the mouse position from event
@@ -124,7 +155,32 @@ def start_analysis():
             analysis_log['text'] = analysis_log['text'] + f"point{point_num} = " + str(point[0]) + " " + str(
                 point[1]) + "\n"
             print(f"point{point_num} ", point)
-    
+
+            # colors a red dot for the unconfirmed point for clarity
+            tk_img_arr = np.array(tk_img_arr)
+            if prev_point:
+                x = prev_point[0]
+                y = prev_point[1]
+                if (tk_img_arr[y][x] == [255, 0, 0]).all():
+                    intensity = surface_img_arr[y][x]
+                    tk_img_arr[y][x] = [intensity, intensity, intensity]
+
+            tk_img_arr[point[1], point[0]] = [255, 0, 0]
+            bf_x = len(tk_img_arr[0])
+            bf_y = len(tk_img_arr)
+
+            # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
+            if bf_x > bf_y:
+                tk_img = Image.fromarray(tk_img_arr).resize((400, int((bf_y / bf_x) * 400)))
+            elif bf_x < bf_y:
+                tk_img = Image.fromarray(tk_img_arr).resize((int((bf_x / bf_y) * 400), 400))
+            else:
+                tk_img = Image.fromarray(tk_img_arr).resize((400, 400))
+            tk_img = ImageTk.PhotoImage(image=tk_img)
+            r.tk_img = tk_img
+            c1.itemconfigure(bf_image, image=tk_img)
+            prev_point = point
+
             # displays selected diffraction pattern from .blo file
             preview_img = np.asarray(file.data[point[1]][point[0]])
             preview_img = Image.fromarray(preview_img).resize((400, 400))
@@ -138,6 +194,10 @@ def start_analysis():
 
         def finalize_points():
             global selected_points
+
+            # for testing
+            selected_points = [(70, 4), (78, 49), (36, 14), (10, 13)]
+
             if len(selected_points) >= 1:
                 print("Selected points (x,y):")
                 for i in range(len(selected_points)):
@@ -163,8 +223,15 @@ def start_analysis():
         f.place(relwidth=1, relheight=1)
 
         surface_img_arr = create_surface_img(file)
+        prev_point = []
         img_x = len(surface_img_arr[0])
         img_y = len(surface_img_arr)
+        tk_img_arr = np.zeros((img_y, img_x, 3), dtype='uint8')
+        for row in range(len(surface_img_arr)):
+            for col in range(len(surface_img_arr[row])):
+                i = surface_img_arr[row][col]
+                tk_img_arr[row][col] = [i, i, i]
+        tk_img_arr_orig = tk_img_arr
         # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
         if img_x > img_y:
             tk_image = Image.fromarray(surface_img_arr).resize((400, int((img_y/img_x) * 400)))
@@ -172,7 +239,7 @@ def start_analysis():
             tk_image = Image.fromarray(surface_img_arr).resize((int((img_x / img_y) * 400), 400))
         else:
             tk_image = Image.fromarray(surface_img_arr).resize((400, 400))
-
+        tk_image_orig = tk_image
         # canvas for surface image
 
         if img_x > img_y:
@@ -184,7 +251,7 @@ def start_analysis():
 
         c1.place(relx=0.07, anchor='nw')
         tk_image = ImageTk.PhotoImage(image=tk_image)
-        c1.create_image(0, 0, anchor='nw', image=tk_image)
+        bf_image = c1.create_image(0, 0, anchor='nw', image=tk_image, tag='img')
         c1.bind('<Button-1>', get_mouse_xy)
     
         # canvas for preview diffraction pattern
@@ -240,7 +307,6 @@ def analysis(points):
                 processing_list[i].append(file.data[point[1]][point[0]])
                 processing_list[i].append(file.data[y][x])
                 i += 1
-
         del processing_list[-1]
 
         results = []
@@ -289,6 +355,66 @@ def ssim_similarity(img_arrays):
     return similarity
 
 
+# def blob_similarity(img_arrays):
+#     def blob_detection(input_image, img_scale=1.0):
+#         params = cv2.SimpleBlobDetector_Params()
+#
+#         # Change thresholds
+#         params.minThreshold = 0
+#         params.maxThreshold = 255
+#         params.thresholdStep = 1
+#         params.minRepeatability = 1
+#         # params.filterByColor = 255
+#
+#         # Filter by Area.
+#         params.filterByArea = True
+#         params.minArea = 3500 * img_scale ** 2
+#         # might be able to scale the min area to the center most dot based on the
+#         # input image magnification, scale, resolution
+#
+#         # Filter by Circularity
+#         params.filterByCircularity = True
+#         params.minCircularity = 0.5
+#
+#         # Filter by Convexity
+#         params.filterByConvexity = True
+#         params.minConvexity = 0.7
+#
+#         # Filter by Inertia
+#         params.filterByInertia = True
+#         params.minInertiaRatio = 0.1
+#
+#         # Create a detector with the parameters
+#         detector = cv2.SimpleBlobDetector_create(params)
+#         keypoints = detector.detect(input_image)
+#         invert_input = 255 - input_image
+#         im_with_keypoints = cv2.drawKeypoints(invert_input, keypoints, np.array([]), (0, 0, 255),
+#                                               cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+#
+#         original_image = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
+#         combined_img = cv2.addWeighted(resize_image(im_with_keypoints, (1 / img_scale)), 0.5, original_image, 0.5, 0)
+#         cv2.imshow('Blob Keypoints', combined_img)
+#         cv2.waitKey(0)
+#
+#     def resize_image(input_image, img_scale):
+#         width = int(input_image.shape[1] * img_scale)
+#         height = int(input_image.shape[0] * img_scale)
+#         dim = (width, height)
+#         scaled_image = cv2.resize(input_image, dim)
+#         return scaled_image
+#
+#     scale = 1
+#
+#     img = cv2.
+#
+#     img = cv2.imread(str(img_dir + str(file)), cv2.IMREAD_COLOR)
+#     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+#     image = 255 - img_gray  # inverting for better detection
+#     image = resize_image(image, scale)
+#     # hough_circle_detection(image)
+#     blob_detection(image, scale)
+
+
 def heat_map():
     global similarity_values
 
@@ -334,51 +460,56 @@ def create_region_map():
 
     points = len(similarity_values)
     intensity_section = 255 / (points + 2)
-    region_map_array = np.zeros(similarity_values[0].shape)
-    print(np.zeros(similarity_values[0].shape))
+    size = (similarity_values[0].shape[0], similarity_values[0].shape[1], 3)
+    print(size)
+    region_map_array = np.zeros(size, np.uint8)
+    region_colors_hsv = [(int(i * 255 / points), 255, 255) for i in range(points)]
+    print(region_map_array)
+    print(region_colors_hsv)
     bins = 100
-    for i in range(points):
-        percentile = np.percentile(similarity_values[i], 95)
-        std = np.std(similarity_values[i])
-        print(percentile - (3*std/4))
-        histogram = plt.hist(similarity_values[i].flat, bins=100)
-        min_height = (similarity_values[i].shape[0] * similarity_values[i].shape[1]) / (bins * 50)
-        print(similarity_values[i].shape[0] * similarity_values[i].shape[1])
-        print(min_height)
-        hist_peaks = find_peaks(histogram[0], height=min_height)
-        print(histogram[0])
-        print(histogram[1])
-        print(hist_peaks)
-        print(hist_peaks[0][-1])
-        min_similarity = histogram[1][hist_peaks[0][-1]] * 0.95
-        print(min_similarity)
-        print(std)
-        print()
-        for y in range(len(similarity_values[i])):
-            for x in range(len(similarity_values[i][y])):
-                if similarity_values[i][y][x] >= min_similarity:
-                    if region_map_array[y][x] != 0:
-                        region_map_array[y][x] = int((region_map_array[y][x] + ((i + 1) * intensity_section)) / 2)
-                    else:
-                        region_map_array[y][x] = int((i + 1) * intensity_section)
+    # for i in range(points):
+    #     percentile = np.percentile(similarity_values[i], 95)
+    #     std = np.std(similarity_values[i])
+    #     print(percentile - (3*std/4))
+    #     histogram = plt.hist(similarity_values[i].flat, bins=100)
+    #     min_height = (similarity_values[i].shape[0] * similarity_values[i].shape[1]) / (bins * 50)
+    #     print(similarity_values[i].shape[0] * similarity_values[i].shape[1])
+    #     print(min_height)
+    #     hist_peaks = find_peaks(histogram[0], height=min_height)
+    #     print(histogram[0])
+    #     print(histogram[1])
+    #     print(hist_peaks)
+    #     print(hist_peaks[0][-1])
+    #     min_similarity = histogram[1][hist_peaks[0][-1]] * 0.95
+    #     print(min_similarity)
+    #     print(std)
+    #     print()
+    #     for y in range(len(similarity_values[i])):
+    #         for x in range(len(similarity_values[i][y])):
+    #             if similarity_values[i][y][x] >= min_similarity:
+    #                 if region_map_array[y][x].all() != 0:
+    #                     region_map_array[y][x][0] = (region_map_array[y][x][0] + region_colors_hsv[i][0]) / 2
+    #                 else:
+    #                     region_map_array[y][x] = region_colors_hsv[i]
 
     # cleans up closest similarity for any missing spaces, minimum similarity is 0.75
     for y in range(len(region_map_array)):
-        for x in range(len(region_map_array)):
-            if region_map_array[y][x] == 0:
-                max_sim = 0
+        for x in range(len(region_map_array[y])):
+            if region_map_array[y][x].all() == 0:
+                max_sim = 0.0
+                min_sim = 0.6
                 index = 0
                 for i in range(len(similarity_values)):
                     if similarity_values[i][y][x] > max_sim:
                         max_sim = similarity_values[i][y][x]
                         index = i
-                if max_sim >= 0.75:
-                    region_map_array[y][x] = int((index + 1) * intensity_section)
+                if max_sim >= min_sim:
+                    region_map_array[y][x] = region_colors_hsv[index]
 
-    region_map_image = Image.fromarray(region_map_array)
-    region_map_image = region_map_image.convert('L')
+    region_map_image = Image.fromarray(region_map_array, mode='HSV')
+    region_map_image = region_map_image.convert('RGB')
     region_map_image.show()
-    region_map_image.save('region_map.png')
+    region_map_image.save('region_map_hsv.png')
 
         
 if __name__ == "__main__":
