@@ -128,6 +128,10 @@ def filter_method(image, denoise_method, radius):
                                                                                use_paraboloid=False, do_presmooth=True))
     elif denoise_method == 'CLAHE':
         filtered_image = np.array(clahe_normalization(image, radius))
+    elif denoise_method == 'Automatic CLAHE':
+        filtered_image = np.array(automatic_clahe(image))
+    elif denoise_method == 'Automatic Histogram Adjustment':
+        filtered_image = np.array(automatic_hist_adjust(image))
     elif denoise_method == 'Regional Maxima':
         filtered_image = np.array(regional_maxima(image, radius), dtype='uint8')
     elif denoise_method == 'Adaptive Histogram Equalization':
@@ -185,6 +189,29 @@ def clahe_normalization(image, radius):
     image = clahe.apply(image)
     return image
 
+
+# no user-input parameter
+def automatic_clahe(image):
+    avg_val = np.average(image)
+    clip_lim = round(30.0 / avg_val) + 1
+    clahe = cv2.createCLAHE(clipLimit=clip_lim, tileGridSize=(4, 4))
+    image = clahe.apply(image)
+    return image
+
+
+# no user-input parameter
+def automatic_hist_adjust(image):
+    avg_val = np.average(image)
+    for i in range(len(image)):
+        for j in range(len(image[0])):
+            val = image[i][j]
+            val = val * (255 / (2 * avg_val + 40)) - avg_val
+            if val > 255:
+                val = 255
+            if val < 0:
+                val = 0
+            image[i][j] = val
+    return image
 
 # # Work in Progress, doesn't do much.
 # def custom_filter1(image):
@@ -477,9 +504,9 @@ def start_analysis():
         filter_label = tk.Label(f, text='Filtering Method', bg='#FFFFFF', font=('Calibri', 20), fg='#373737')
         filter_label.place(relx=0.05, rely=0.60)
         filter_options = ['None', 'Gaussian', 'Non Local Means', 'Rolling Ball Correction', 'CLAHE',
-                          'Adaptive Histogram Equalization', 'Regional Maxima', 'Local Histogram Equalization',
-                          'Global Histogram Equalization', 'Centered Mask', 'Normalize', 'Median',
-                          'Contrast Stretching']
+                          'Automatic CLAHE', 'Automatic Histogram Adjustment', 'Adaptive Histogram Equalization',
+                          'Regional Maxima', 'Local Histogram Equalization', 'Global Histogram Equalization',
+                          'Centered Mask', 'Normalize', 'Median', 'Contrast Stretching']
         filter_clicked = tk.StringVar()
         filter_clicked.set(filter_options[0])
         filter_dropdown = tk.OptionMenu(f, filter_clicked, *filter_options)
