@@ -151,6 +151,9 @@ def filter_method(image, denoise_method, radius):
     elif denoise_method == 'Median':
         radius = int(radius)
         filtered_image = medfilt(image, radius)
+    elif denoise_method == 'Rescale':
+        img_copy = image.copy()
+        filtered_image = resize_image(img_copy, radius)
     return filtered_image
 
 
@@ -166,6 +169,15 @@ def filter_method(image, denoise_method, radius):
 #                 print(image[row][col])
 #             new_image[row][col] = (image[row][col] - img_min) * (new_max / (img_max-img_min))
 #     return new_image
+
+
+# rescales the image based on the given scale factor from 0-1
+def resize_image(input_image, img_scale):
+    width = int(input_image.shape[1] * img_scale)
+    height = int(input_image.shape[0] * img_scale)
+    dim = (width, height)
+    scaled_image = cv2.resize(input_image, dim)
+    return scaled_image
 
 
 def centered_mask(image, radius):
@@ -409,6 +421,21 @@ def start_analysis():
                 pass
             pool.close()
 
+            if filter_type == 'Rescale':
+                file_x = file_array.shape[1]
+                file_y = file_array.shape[0]
+                img_width = int(file_array.shape[3] * radius)
+                img_height = int(file_array.shape[2] * radius)
+                dim = (file_y, file_x, img_height, img_width)
+                file_array = np.zeros(dim)
+            elif post_filter_type == 'Rescale':
+                file_x = file_array.shape[1]
+                file_y = file_array.shape[0]
+                img_width = int(file_array.shape[3] * post_radius)
+                img_height = int(file_array.shape[2] * post_radius)
+                dim = (file_y, file_x, img_height, img_width)
+                file_array = np.zeros(dim)
+
             i = 0
             # reshapes the array back into the original shape from the flattened results
             for row in range(len(file_array)):
@@ -494,7 +521,7 @@ def start_analysis():
         confirm_button.place(relx=0.40, rely=0.88, relwidth=0.20, relheight=0.07)
 
         # Filter File button
-        analyze_button = tk.Button(f, text='Filter File', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
+        analyze_button = tk.Button(f, text='Filter .blo File', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
                                    bd=0, activebackground='#D4D4D4', activeforeground='#252525',
                                    command=lambda: filter_file(), pady=0.02, fg='#373737', borderwidth='2',
                                    relief="groove")
@@ -506,7 +533,7 @@ def start_analysis():
         filter_options = ['None', 'Gaussian', 'Non Local Means', 'Rolling Ball Correction', 'CLAHE',
                           'Automatic CLAHE', 'Automatic Histogram Adjustment', 'Adaptive Histogram Equalization',
                           'Regional Maxima', 'Local Histogram Equalization', 'Global Histogram Equalization',
-                          'Centered Mask', 'Normalize', 'Median', 'Contrast Stretching']
+                          'Centered Mask', 'Normalize', 'Median', 'Contrast Stretching', 'Rescale']
         filter_clicked = tk.StringVar()
         filter_clicked.set(filter_options[0])
         filter_dropdown = tk.OptionMenu(f, filter_clicked, *filter_options)
