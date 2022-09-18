@@ -20,6 +20,8 @@ import SSIM_PIL
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import cv2
+from math import sqrt
+import scipy.spatial.distance as ssd
 
 
 # global variables
@@ -44,19 +46,19 @@ def load_file():
 
 
 # takes in an image and returns a filtered version (gaussian)
-def denoise(orig_image):
-    denoise_radius = 3
-    denoised_image = gaussian_filter(orig_image, denoise_radius)
-    denoised_image = Image.fromarray(denoised_image)
-    denoised_image = ImageOps.autocontrast(denoised_image, cutoff=1)
-    denoised_image = np.array(denoised_image)
-    return denoised_image
+# def denoise(orig_image):
+#     denoise_radius = 3
+#     denoised_image = gaussian_filter(orig_image, denoise_radius)
+#     denoised_image = Image.fromarray(denoised_image)
+#     denoised_image = ImageOps.autocontrast(denoised_image, cutoff= )
+#     denoised_image = np.array(denoised_image)
+#     return denoised_image
 
 
 # returns a representation of the .blo file as a 2d array that can be turned into an image
 def create_surface_img(stem_file):
     # creates equal sized # of sections to take the center of the image
-    sections = 2
+    sections = 6
     image_length = len(stem_file.data[0][0])
     section_size = image_length / sections
     section1 = int((image_length / 2) - (section_size / 2))
@@ -81,6 +83,7 @@ def create_surface_img(stem_file):
             surface_img.append([])
 
     surface_img_arr = np.asarray(surface_img)
+    surface_img_arr = 255 - surface_img_arr
     surface_img = Image.fromarray(np.asarray(surface_img), mode='L')
     surface_img = ImageOps.autocontrast(surface_img, cutoff=1)
     surface_img.save('surface image.jpeg', format='jpeg')
@@ -196,7 +199,9 @@ def start_analysis():
             global selected_points
 
             # for testing
-            selected_points = [(70, 4), (78, 49), (36, 14), (10, 13)]
+            # selected_points = [(145, 234), (229, 230), (89, 233), (69, 232)]
+            # selected_points = [(70, 4), (78, 49), (36, 14), (10, 13)]
+            # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]
 
             if len(selected_points) >= 1:
                 print("Selected points (x,y):")
@@ -310,8 +315,8 @@ def analysis(points):
         del processing_list[-1]
 
         results = []
-        pool = Pool(processes=None)
-        for output in tqdm.tqdm(pool.imap_unordered(ssim_similarity, processing_list), total=len(processing_list)):
+        pool = Pool(processes=4)
+        for output in tqdm.tqdm(pool.imap_unordered(euclidean_similarity, processing_list), total=len(processing_list)):
             results.append(output)
             pass
         pool.close()
@@ -323,6 +328,7 @@ def analysis(points):
                 # if results[i] >= 0.99:
                 #     similarity[y][x] = float('NaN')
                 # else:
+
                 similarity[y][x] = results[i]
                 i += 1
 
@@ -333,6 +339,19 @@ def analysis(points):
 def cosine_similarity(img_arrays):
     similarity = -1 * (spatial.distance.cosine(img_arrays[0].flatten(), img_arrays[1].flatten()) - 1)
     return similarity
+
+
+# def mahalanobis_dist(img_arrays):
+#     array1 = img_arrays[0].flatten()
+#     array2 = img_arrays[1].flatten()
+#     mag1 = np.linalg.norm(array1)
+#     mag2 = np.linalg.norm(array2)
+#     combined_array = np.vstack([array1, array2])
+#     v = np.cov(combined_array.T)
+#     inv_v = np.linalg.inv(v)
+#     dist = ssd.mahalanobis(array1, array2, inv_v)
+#     similarity = 1 - (dist / (abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
+#     return similarity
 
 
 def euclidean_similarity(img_arrays):
@@ -355,64 +374,103 @@ def ssim_similarity(img_arrays):
     return similarity
 
 
-# def blob_similarity(img_arrays):
-#     def blob_detection(input_image, img_scale=1.0):
-#         params = cv2.SimpleBlobDetector_Params()
-#
-#         # Change thresholds
-#         params.minThreshold = 0
-#         params.maxThreshold = 255
-#         params.thresholdStep = 1
-#         params.minRepeatability = 1
-#         # params.filterByColor = 255
-#
-#         # Filter by Area.
-#         params.filterByArea = True
-#         params.minArea = 3500 * img_scale ** 2
-#         # might be able to scale the min area to the center most dot based on the
-#         # input image magnification, scale, resolution
-#
-#         # Filter by Circularity
-#         params.filterByCircularity = True
-#         params.minCircularity = 0.5
-#
-#         # Filter by Convexity
-#         params.filterByConvexity = True
-#         params.minConvexity = 0.7
-#
-#         # Filter by Inertia
-#         params.filterByInertia = True
-#         params.minInertiaRatio = 0.1
-#
-#         # Create a detector with the parameters
-#         detector = cv2.SimpleBlobDetector_create(params)
-#         keypoints = detector.detect(input_image)
-#         invert_input = 255 - input_image
-#         im_with_keypoints = cv2.drawKeypoints(invert_input, keypoints, np.array([]), (0, 0, 255),
-#                                               cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-#
-#         original_image = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
-#         combined_img = cv2.addWeighted(resize_image(im_with_keypoints, (1 / img_scale)), 0.5, original_image, 0.5, 0)
-#         cv2.imshow('Blob Keypoints', combined_img)
-#         cv2.waitKey(0)
-#
-#     def resize_image(input_image, img_scale):
-#         width = int(input_image.shape[1] * img_scale)
-#         height = int(input_image.shape[0] * img_scale)
-#         dim = (width, height)
-#         scaled_image = cv2.resize(input_image, dim)
-#         return scaled_image
-#
-#     scale = 1
-#
-#     img = cv2.
-#
-#     img = cv2.imread(str(img_dir + str(file)), cv2.IMREAD_COLOR)
-#     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-#     image = 255 - img_gray  # inverting for better detection
-#     image = resize_image(image, scale)
-#     # hough_circle_detection(image)
-#     blob_detection(image, scale)
+def blob_similarity(img_arrays, scale=1.0):
+    def blob_detection(input_image, img_scale=1.0):
+        input_image = 255 - input_image
+        params = cv2.SimpleBlobDetector_Params()
+
+        # Change thresholds
+        params.minThreshold = 0
+        params.maxThreshold = 255
+        params.thresholdStep = 1
+        params.minRepeatability = 1
+        # params.filterByColor = 255
+
+        # Filter by Area.
+        params.filterByArea = True
+        params.minArea = 1000
+        # might be able to scale the min area to the center most dot based on the
+        # input image magnification, scale, resolution
+
+        # Filter by Circularity
+        params.filterByCircularity = True
+        params.minCircularity = 0.5
+
+        # Filter by Convexity
+        params.filterByConvexity = True
+        params.minConvexity = 0.7
+
+        # Filter by Inertia
+        params.filterByInertia = True
+        params.minInertiaRatio = 0.1
+
+        # Create a detector with the parameters
+        detector = cv2.SimpleBlobDetector_create(params)
+        keypoints = detector.detect(input_image)
+
+        kps = []
+        for kp in keypoints:
+            kps.append([kp.pt[0], kp.pt[1], kp.size])
+
+        # invert_input = 255 - input_image
+        # im_with_keypoints = cv2.drawKeypoints(invert_input, keypoints, np.array([]), (0, 0, 255),
+        #                                       cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        #
+        # original_image = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
+        # combined_img = cv2.addWeighted(resize_image(im_with_keypoints, (1 / img_scale)), 0.5, original_image, 0.5, 0)
+        # cv2.imshow('Blob Keypoints', combined_img)
+        # cv2.waitKey(0)
+        return kps
+
+    def resize_image(input_image, img_scale):
+        width = int(input_image.shape[1] * img_scale)
+        height = int(input_image.shape[0] * img_scale)
+        dim = (width, height)
+        scaled_image = cv2.resize(input_image, dim)
+        return scaled_image
+
+    array1 = img_arrays[0]
+    array2 = img_arrays[1]
+    w_count = 1
+    w_pos = 4
+    w_dia = 1
+    kps1 = blob_detection(array1)
+    kps2 = blob_detection(array2)
+
+    # Count similarity
+    if len(kps1) != 0:
+        count_sim = len(kps2) / len(kps1)
+        if count_sim > 1:
+            count_sim = 1 / count_sim
+    else:
+        w_count = 0
+        count_sim = 0
+
+    # Position similarity
+    pos_blob_sims = []
+    closest_index = []
+    for blob in kps1:
+        min_dist = len(array1)
+        for blob2 in kps2:
+            dist = sqrt((blob[0] - blob2[0]) ** 2 + (blob[1] - blob2[1]) ** 2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_index.append(kps2.index(blob2))
+        point_sim = 1 - (min_dist / len(array1))
+        pos_blob_sims.append(point_sim)
+    pos_sim = np.average(pos_blob_sims)
+
+    # Diameter similarity
+    dia_blob_sims = []
+    for i in range(len(kps1)):
+        point_dia_sim = kps2[closest_index[i]][2] / kps1[i][2]
+        if point_dia_sim > 1:
+            point_dia_sim = 1 / point_dia_sim
+        dia_blob_sims.append(point_dia_sim)
+    dia_sim = np.average(dia_blob_sims)
+
+    similarity = ((w_count * count_sim) + (w_pos * pos_sim) + (w_dia * dia_sim)) / (w_dia + w_count + w_pos)
+    return similarity
 
 
 def heat_map():
@@ -497,7 +555,7 @@ def create_region_map():
         for x in range(len(region_map_array[y])):
             if region_map_array[y][x].all() == 0:
                 max_sim = 0.0
-                min_sim = 0.6
+                min_sim = 0.0
                 index = 0
                 for i in range(len(similarity_values)):
                     if similarity_values[i][y][x] > max_sim:
