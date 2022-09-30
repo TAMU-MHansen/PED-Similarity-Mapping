@@ -4,6 +4,8 @@ from tkinter import filedialog
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
+import cv2
+from scipy.signal import medfilt
 from pixstem.api import PixelatedSTEM
 from PIL import Image, ImageTk, ImageOps, ImageFilter
 from scipy.ndimage import gaussian_filter
@@ -12,7 +14,6 @@ import tqdm
 import tensorflow as tf
 from multiprocessing import Pool
 import requests
-import cv2
 from keras.applications.vgg16 import preprocess_input
 from keras.applications.vgg16 import VGG16
 from keras.models import Model
@@ -47,12 +48,12 @@ def start_analysis():
     # generate feature vectors for all images in blockfile
     def extract_features(arr, model1):
         # load the image as 224x224
-        arr = gaussian_filter(arr, 2*floor((int(round(len(arr)/64.0)))/2)+1)
+        # arr = gaussian_filter(arr, 2*floor((int(round(len(arr)/64.0)))/2)+1)
         img = Image.fromarray(arr)
         img = img.convert("RGB")
         img = img.resize((224, 224))
         # img = img.filter(ImageFilter.GaussianBlur)
-        img = ImageOps.autocontrast(img, cutoff=1)
+        # img = ImageOps.autocontrast(img, cutoff=1)
         # convert from 'PIL.Image.Image' to numpy array
         img = np.array(img)
         # reshape the data for the model reshape(num_of_samples, dim 1, dim 2, channels)
@@ -63,6 +64,22 @@ def start_analysis():
         features = model1.predict(img_x, use_multiprocessing=True, verbose=0)
         return features
 
+        # arr = cv2.resize(arr, (400, 400))
+        # filtered = medfilt(arr, 11)
+        # norm = np.zeros((400, 400))
+        # filtered = cv2.normalize(filtered, norm, 0, 255, cv2.NORM_MINMAX)
+        # img = Image.fromarray(filtered)
+        # img = img.convert("RGB")
+        # img = img.resize((224, 224))
+        # img = np.array(img)
+        # # reshape the data for the model reshape(num_of_samples, dim 1, dim 2, channels)
+        # reshaped_img = img.reshape(1, 224, 224, 3)
+        # # prepare image for model
+        # img_x = preprocess_input(reshaped_img)
+        # # get the feature vector
+        # features = model1.predict(img_x, use_multiprocessing=True, verbose=0)
+        # return features
+
     model = VGG16()
     model = Model(inputs=model.inputs, outputs=model.layers[-2].output)
 
@@ -72,6 +89,8 @@ def start_analysis():
     with tqdm.tqdm(total=len(file.data)*len(file.data[0])) as pbar:
         for i in range(len(file.data)):
             for j in range(len(file.data[0])):
+        # for i in range(10):
+            # for j in range(10):
                 # try to extract the features and update the dictionary
                 image_from_arr = file.data[i][j]
                 image_name = "img" + str(i) + "_" + str(j)
@@ -94,6 +113,8 @@ def start_analysis():
     pca.fit(feat)
     x = pca.transform(feat)
 
+    # print(x)
+
     ####################################################################################################################
     # get statistics for k-means clustering
     inertia_list = []
@@ -105,7 +126,7 @@ def start_analysis():
         kmeans1.fit(x)
         inertia_list.append(kmeans1.inertia_)
 
-    print("Inertia list: ", inertia_list)
+    # print("Inertia list: ", inertia_list)
 
     # automatic k detection using elbow method and distance calculation
     """distances = []
@@ -167,14 +188,17 @@ def start_analysis():
         kmeans = KMeans(n_clusters=k, random_state=22)
         kmeans.fit(x)
 
-        heatmap_arr = []
-        for filename, cluster in zip(filenames, kmeans.labels_):
-            heatmap_arr.append(int(cluster) * 40)
-        heatmap_arr_2d = np.reshape(heatmap_arr, (-1, len(file.data)))  # change according to data size
-        heatmap_length = len(heatmap_arr_2d)
-        print(heatmap_arr_2d)
+        data_len = len(file.data)
+        heatmap_arr = np.zeros([data_len, data_len, 3], dtype=np.uint8)
+        print(heatmap_arr)
+        labels = np.reshape(kmeans.labels_, (-1, data_len))
+        print(labels)
+        for (row, col), cluster in np.ndenumerate(labels):
+            heatmap_arr[row][col] = [int((cluster * 255 / k)), 255, 255]
+        heatmap_length = len(heatmap_arr)
+        print(heatmap_arr)
 
-        tk_image = Image.fromarray(heatmap_arr_2d).resize((400, 400))
+        tk_image = Image.fromarray(heatmap_arr, mode='HSV').convert('RGB').resize((400, 400))
         tk_image = ImageTk.PhotoImage(image=tk_image)
         r1.tk_image = tk_image
         c2.itemconfigure(temp_img, image=tk_image)
@@ -196,13 +220,23 @@ def start_analysis():
 
             # displays selected diffraction pattern from .blo file
             preview_img = np.asarray(file.data[int(event.y * length / 400)][int(event.x * length / 400)])
-            preview_img = gaussian_filter(preview_img, 2*floor((int(round(len(preview_img)/64.0)))/2)+1)
+            # preview_img = gaussian_filter(preview_img, 2*floor((int(round(len(preview_img)/64.0)))/2)+1)
             preview_img = Image.fromarray(preview_img).resize((400, 400))
             # preview_img = preview_img.filter(ImageFilter.GaussianBlur)
-            preview_img = ImageOps.autocontrast(preview_img, cutoff=1)
+            # preview_img = ImageOps.autocontrast(preview_img, cutoff=1)
             preview_img = ImageTk.PhotoImage(image=preview_img)
             r1.preview_img = preview_img
             c3.itemconfigure(point_img, image=preview_img)
+
+            # preview_img = np.asarray(file.data[int(event.y * length / 400)][int(event.x * length / 400)])
+            # preview_img = medfilt(preview_img, 2*floor((int(round(len(preview_img)/36.0)))/2)+1)
+            # preview_img = cv2.resize(preview_img, (400, 400))
+            # norm = np.zeros((400, 400))
+            # preview_img = cv2.normalize(preview_img, norm, 0, 255, cv2.NORM_MINMAX)
+            # preview_img = Image.fromarray(preview_img)
+            # preview_img = ImageTk.PhotoImage(image=preview_img)
+            # r1.preview_img = preview_img
+            # c3.itemconfigure(point_img, image=preview_img)
 
         r1.update()
 
