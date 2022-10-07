@@ -201,7 +201,7 @@ def start_analysis():
 
             # for testing
             # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166)]  # SMA sample
-            selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
+            # selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
             # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]  # Crazy SMA
             sim_type = sim_selected.get()
             if len(selected_points) >= 1:
