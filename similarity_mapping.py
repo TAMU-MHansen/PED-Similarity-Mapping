@@ -58,7 +58,7 @@ def load_file():
 # returns a representation of the .blo file as a 2d array that can be turned into an image
 def create_surface_img(stem_file):
     # creates equal sized # of sections to take the center of the image
-    sections = 6
+    sections = 8
     image_length = len(stem_file.data[0][0])
     section_size = image_length / sections
     section1 = int((image_length / 2) - (section_size / 2))
@@ -82,11 +82,12 @@ def create_surface_img(stem_file):
         if i != len(stem_file.data) - 1:
             surface_img.append([])
 
-    surface_img_arr = np.asarray(surface_img)
-    surface_img_arr = 255 - surface_img_arr
-    surface_img = Image.fromarray(np.asarray(surface_img), mode='L')
-    surface_img = ImageOps.autocontrast(surface_img, cutoff=1)
+    surface_img_arr = np.asarray(surface_img, dtype='uint8')
+    # surface_img_arr = 255 - surface_img_arr
+    surface_img = Image.fromarray(surface_img_arr, mode='L')
+    surface_img = ImageOps.autocontrast(surface_img, cutoff=(1, 0))
     surface_img.save('surface image.jpeg', format='jpeg')
+    surface_img_arr = np.asarray(surface_img)
 
     return surface_img_arr
 
@@ -199,21 +200,54 @@ def start_analysis():
             global selected_points
 
             # for testing
-            # selected_points = [(145, 234), (229, 230), (89, 233), (69, 232)]
-            # selected_points = [(70, 4), (78, 49), (36, 14), (10, 13)]
-            # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]
-
+            # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166)]  # SMA sample
+            selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
+            # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]  # Crazy SMA
+            sim_type = sim_selected.get()
             if len(selected_points) >= 1:
                 print("Selected points (x,y):")
                 for i in range(len(selected_points)):
                     print(f"point{i + 1} = {selected_points[i][0]}, {selected_points[i][1]}")
                 analysis_log['text'] = analysis_log['text'] + "Starting analysis...\n"
-                analysis(selected_points)
+                analysis(selected_points, sim_type)
                 c2.unbind('<Button-1>')
                 r.destroy()
                 label1['text'] = label1['text'] + "Analysis complete.\n"
             else:
                 reset_points()
+
+        def compare_points():
+            global selected_points
+
+            # selected_points = [(39, 220), (81, 219), (64, 223), (126, 198), (191, 166), (270, 106)]  # SMA sample
+            # selected_points = [(40, 52), (80, 51), (12, 15), (41, 14), (63, 3)]  # VO2
+            sim_type = sim_selected.get()
+            if len(selected_points) >= 1:
+                print("Selected points (x,y):")
+                for i in range(len(selected_points)):
+                    print(f"point{i + 1} = {selected_points[i][0]}, {selected_points[i][1]}")
+                analysis_log['text'] = analysis_log['text'] + "Starting comparison...\n"
+                sim_results = []
+                base_img = file.data[selected_points[0][1]][selected_points[0][0]]
+                for point in selected_points:
+                    compare_img = file.data[point[1]][point[0]]
+                    if sim_type == 'Euclidean':
+                        sim_results.append(euclidean_similarity([base_img, compare_img]))
+                    elif sim_type == 'SSIM':
+                        sim_results.append(ssim_similarity([base_img, compare_img]))
+                    elif sim_type == 'Cosine':
+                        sim_results.append(cosine_similarity([base_img, compare_img]))
+                    save_img = Image.fromarray(compare_img)
+                    save_img.save(f'x{point[1]}_y{point[0]}.png')
+                c2.unbind('<Button-1>')
+                print(sim_type)
+                for sim in sim_results:
+                    print(f'{sim:.3f}, ', end='')
+                print()
+            else:
+                reset_points()
+
+            return
 
         # main window
         r = tk.Toplevel(root)
@@ -289,6 +323,19 @@ def start_analysis():
                                    command=lambda: finalize_points(), pady=0.02, fg='#373737', borderwidth='2',
                                    relief="groove")
         analyze_button.place(relx=0.65, rely=0.88, relwidth=0.20, relheight=0.07)
+
+        compare_point_button = tk.Button(f, text='Compare points', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
+                                   bd=0, activebackground='#D4D4D4', activeforeground='#252525',
+                                   command=lambda: compare_points(), pady=0.02, fg='#373737', borderwidth='2',
+                                   relief="groove")
+        compare_point_button.place(relx=0.65, rely=0.78, relwidth=0.20, relheight=0.07)
+
+        sim_options = ['Euclidean', 'Cosine', 'SSIM']
+        sim_selected = tk.StringVar()
+        sim_selected.set(sim_options[0])
+        sim_method = tk.OptionMenu(f, sim_selected, *sim_options)
+        sim_method.place(relx=0.40, rely=0.78, relwidth=0.20, relheight=0.07)
+
         reset_points()
         r.mainloop()
         
@@ -296,7 +343,7 @@ def start_analysis():
         label3['text'] = "Please select a file and try again.\n"
 
 
-def analysis(points):
+def analysis(points, sim_type):
     global file, similarity_values
 
     # point = points[0]
@@ -316,9 +363,20 @@ def analysis(points):
 
         results = []
         pool = Pool(processes=4)
-        for output in tqdm.tqdm(pool.imap_unordered(euclidean_similarity, processing_list), total=len(processing_list)):
-            results.append(output)
-            pass
+        if sim_type == 'Euclidean':
+            for output in tqdm.tqdm(pool.imap_unordered(euclidean_similarity, processing_list),
+                                    total=len(processing_list)):
+                results.append(output)
+                pass
+        elif sim_type == 'SSIM':
+            for output in tqdm.tqdm(pool.imap_unordered(ssim_similarity, processing_list), total=len(processing_list)):
+                results.append(output)
+                pass
+        elif sim_type == 'Cosine':
+            for output in tqdm.tqdm(pool.imap_unordered(cosine_similarity, processing_list),
+                                    total=len(processing_list)):
+                results.append(output)
+                pass
         pool.close()
 
         similarity = np.zeros((y_length, x_length))
