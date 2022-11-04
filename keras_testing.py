@@ -85,12 +85,12 @@ def start_analysis():
 
     data = {}
 
+    # file_size = len(file.data)
+    file_size = 100
     # loop through each image in the dataset
-    with tqdm.tqdm(total=len(file.data)*len(file.data[0])) as pbar:
-        for i in range(len(file.data)):
-            for j in range(len(file.data[0])):
-        # for i in range(10):
-            # for j in range(10):
+    with tqdm.tqdm(total=file_size*file_size) as pbar:
+        for i in range(file_size):
+            for j in range(file_size):
                 # try to extract the features and update the dictionary
                 image_from_arr = file.data[i][j]
                 image_name = "img" + str(i) + "_" + str(j)
@@ -188,7 +188,8 @@ def start_analysis():
         kmeans = KMeans(n_clusters=k, random_state=22)
         kmeans.fit(x)
 
-        data_len = len(file.data)
+        # data_len = len(file.data)
+        data_len = 100
         heatmap_arr = np.zeros([data_len, data_len, 3], dtype=np.uint8)
         print(heatmap_arr)
         labels = np.reshape(kmeans.labels_, (-1, data_len))
