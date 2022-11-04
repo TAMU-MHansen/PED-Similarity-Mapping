@@ -200,7 +200,7 @@ def start_analysis():
             global selected_points
 
             # for testing
-            # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166)]  # SMA sample
+            # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166), (270, 106), (74, 11)]  # SMA
             # selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
             # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]  # Crazy SMA
             sim_type = sim_selected.get()
@@ -362,18 +362,18 @@ def analysis(points, sim_type):
         del processing_list[-1]
 
         results = []
-        pool = Pool(processes=4)
+        pool = Pool(processes=12)
         if sim_type == 'Euclidean':
-            for output in tqdm.tqdm(pool.imap_unordered(euclidean_similarity, processing_list),
+            for output in tqdm.tqdm(pool.imap(euclidean_similarity, processing_list),
                                     total=len(processing_list)):
                 results.append(output)
                 pass
         elif sim_type == 'SSIM':
-            for output in tqdm.tqdm(pool.imap_unordered(ssim_similarity, processing_list), total=len(processing_list)):
+            for output in tqdm.tqdm(pool.imap(ssim_similarity, processing_list), total=len(processing_list)):
                 results.append(output)
                 pass
         elif sim_type == 'Cosine':
-            for output in tqdm.tqdm(pool.imap_unordered(cosine_similarity, processing_list),
+            for output in tqdm.tqdm(pool.imap(cosine_similarity, processing_list),
                                     total=len(processing_list)):
                 results.append(output)
                 pass
@@ -579,6 +579,12 @@ def create_region_map():
     size = (similarity_values[0].shape[0], similarity_values[0].shape[1], 3)
     print(size)
     region_map_array = np.zeros(size, np.uint8)
+    # region_colors_hsv = []
+    # for i in range(points):
+    #     if i % 2 == 0:
+    #         region_colors_hsv.append((int(i * 255 / points), 255, 255))
+    #     else:
+    #         region_colors_hsv.append((int(i * 255 / points), 180, 180))
     region_colors_hsv = [(int(i * 255 / points), 255, 255) for i in range(points)]
     print(region_map_array)
     print(region_colors_hsv)
