@@ -22,6 +22,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import cv2
 from math import sqrt
 import scipy.spatial.distance as ssd
+import pandas as pd
 
 
 # global variables
@@ -249,7 +250,16 @@ def start_analysis():
 
             return
 
-        # main window
+        def identify_variants():
+            global selected_points
+
+            selected_points = [(0, 0)]
+            sim_type = sim_selected.get()
+            variant_id_analysis(selected_points, sim_type)
+            reset_points()
+            return
+
+            # main window
         r = tk.Toplevel(root)
         r.title('')
     
@@ -330,6 +340,12 @@ def start_analysis():
                                    relief="groove")
         compare_point_button.place(relx=0.65, rely=0.78, relwidth=0.20, relheight=0.07)
 
+        identify_variants_button = tk.Button(f, text='Identify Variants', bg='#F3F3F3', font=('Calibri', 20),
+                                             highlightthickness=0, bd=0, activebackground='#D4D4D4',
+                                             activeforeground='#252525', command=lambda: identify_variants(), pady=0.02,
+                                             fg='#373737', borderwidth='2',relief="groove")
+        identify_variants_button.place(relx=0.65, rely=0.72, relwidth=0.20, relheight=0.05)
+
         sim_options = ['Euclidean', 'Cosine', 'SSIM']
         sim_selected = tk.StringVar()
         sim_selected.set(sim_options[0])
@@ -362,7 +378,7 @@ def analysis(points, sim_type):
         del processing_list[-1]
 
         results = []
-        pool = Pool(processes=12)
+        pool = Pool(processes=None)
         if sim_type == 'Euclidean':
             for output in tqdm.tqdm(pool.imap(euclidean_similarity, processing_list),
                                     total=len(processing_list)):
@@ -392,6 +408,57 @@ def analysis(points, sim_type):
 
         similarity_values.append(similarity)
     print(similarity_values)
+    return similarity_values
+
+
+def variant_id_analysis(points, sim_type):
+    global file, similarity_values
+
+    x_length = len(file.data[0])
+    y_length = len(file.data)
+
+    # Adjust the sim_range(starting sim value, max sim value, sim interval) as needed
+    # Highly recommended to create a heatmap of a single point to get an idea for the starting sim value.
+    # A relatively high value sim value will take a long time to calculate and generate tons of points.
+    sim_range = np.arange(0.3, 0.5, 0.02)
+    for sim_value in sim_range:
+        print(sim_value)
+        point_patterns = [file.data[points[0][1]][points[0][0]]]
+        min_similarity = sim_value
+        # highest_sim_point = np.zeros((x_length, y_length))
+        variant_map = np.zeros((y_length, x_length), dtype='uint8')
+        pool = Pool(processes=None)
+        points = [(0, 0)]
+        with tqdm.tqdm(total=y_length*x_length) as pbar:
+            for y in range(int(y_length)):
+                for x in range(int(x_length)):
+                    multiprocessing_list = []
+                    for point in points:
+                        multiprocessing_list.append([file.data[point[1]][point[0]], file.data[y][x]])
+                    point_sims = []
+
+                    # change the similarity comparison method function here
+                    for point_sim in pool.imap(ssim_similarity, multiprocessing_list):
+                        # point_sim = compare_sim([file.data[point[1]][point[0]], file.data[y][x]], sim_type)
+                        point_sims.append(point_sim)
+                    if np.max(point_sims) < min_similarity:
+                        points.append((x, y))
+                        point_patterns.append(file.data[y][x])
+                        print(f'added point{len(points)}: {x}, {y}')
+                        variant_map[y][x] = len(points) + 1
+                    else:
+                        variant_map[y][x] = point_sims.index(np.max(point_sims)) + 1
+                    pbar.update(1)
+        pd.DataFrame(variant_map).to_csv(f'variant map{sim_value}.csv')
+        np.savetxt(f'point data{sim_value}.txt', points)
+        analysis(points, sim_type)
+        variant_map_img = create_region_map()
+        # scale_value = 255/int(np.max(variant_map))
+        # variant_map = (variant_map * scale_value)
+        # variant_map = np.array(variant_map, dtype='uint8')
+        # variant_map_img = Image.fromarray(variant_map, mode='L')
+        variant_map_img.save(f'Variant map{sim_value}.png')
+    return
 
 
 def cosine_similarity(img_arrays):
@@ -577,7 +644,7 @@ def create_region_map():
     points = len(similarity_values)
     intensity_section = 255 / (points + 2)
     size = (similarity_values[0].shape[0], similarity_values[0].shape[1], 3)
-    print(size)
+    # print(size)
     region_map_array = np.zeros(size, np.uint8)
     # region_colors_hsv = []
     # for i in range(points):
@@ -586,8 +653,8 @@ def create_region_map():
     #     else:
     #         region_colors_hsv.append((int(i * 255 / points), 180, 180))
     region_colors_hsv = [(int(i * 255 / points), 255, 255) for i in range(points)]
-    print(region_map_array)
-    print(region_colors_hsv)
+    # print(region_map_array)
+    # print(region_colors_hsv)
     bins = 100
     # for i in range(points):
     #     percentile = np.percentile(similarity_values[i], 95)
@@ -630,8 +697,9 @@ def create_region_map():
 
     region_map_image = Image.fromarray(region_map_array, mode='HSV')
     region_map_image = region_map_image.convert('RGB')
-    region_map_image.show()
+    # region_map_image.show()
     region_map_image.save('region_map_hsv.png')
+    return region_map_image
 
         
 if __name__ == "__main__":
