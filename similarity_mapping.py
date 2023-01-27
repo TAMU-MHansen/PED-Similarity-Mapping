@@ -202,7 +202,7 @@ def start_analysis():
 
             # for testing
             # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166), (270, 106), (74, 11)]  # SMA
-            # selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
+            selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
             # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]  # Crazy SMA
             sim_type = sim_selected.get()
             if len(selected_points) >= 1:
@@ -253,7 +253,10 @@ def start_analysis():
         def identify_variants():
             global selected_points
 
-            selected_points = [(0, 0)]
+            if len(selected_points) == 0:
+                selected_points = [(0, 0)]
+            elif len(selected_points) > 1:
+                selected_points = [selected_points[0]]
             sim_type = sim_selected.get()
             variant_id_analysis(selected_points, sim_type)
             reset_points()
@@ -407,28 +410,42 @@ def analysis(points, sim_type):
                 i += 1
 
         similarity_values.append(similarity)
-    print(similarity_values)
     return similarity_values
 
 
+# automatic crystallographic variant analysis based on the selected point ((0, 0) with no point selected).
+# iterates through the dataset and adds points if the similarity value is lower than the minimum similarity.
 def variant_id_analysis(points, sim_type):
     global file, similarity_values
 
     x_length = len(file.data[0])
     y_length = len(file.data)
 
+    sim_range_values = np.array(analysis([(0, 0)], sim_type))
+    sim_range_values = sim_range_values[(sim_range_values < 0.99)]
+    sim_std_dev = np.std(sim_range_values)
+    sim_max = np.max(sim_range_values) - (0.5 * sim_std_dev)
+    sim_min = np.min(sim_range_values) + sim_std_dev
+
+    print(f'Min similarity: {sim_min}')
+    print(f'Max similarity: {sim_max}')
+    max_points = 15
+    step_size = (sim_max - sim_min) / 20
+
     # Adjust the sim_range(starting sim value, max sim value, sim interval) as needed
     # Highly recommended to create a heatmap of a single point to get an idea for the starting sim value.
     # A relatively high value sim value will take a long time to calculate and generate tons of points.
-    sim_range = np.arange(0.3, 0.5, 0.02)
+
+    sim_range = np.arange(sim_min, sim_max, step_size)
+    print(sim_range)
+    prev_points = []
     for sim_value in sim_range:
         print(sim_value)
         point_patterns = [file.data[points[0][1]][points[0][0]]]
         min_similarity = sim_value
-        # highest_sim_point = np.zeros((x_length, y_length))
         variant_map = np.zeros((y_length, x_length), dtype='uint8')
         pool = Pool(processes=None)
-        points = [(0, 0)]
+        print(f'\n{points}')
         with tqdm.tqdm(total=y_length*x_length) as pbar:
             for y in range(int(y_length)):
                 for x in range(int(x_length)):
@@ -437,32 +454,60 @@ def variant_id_analysis(points, sim_type):
                         multiprocessing_list.append([file.data[point[1]][point[0]], file.data[y][x]])
                     point_sims = []
 
-                    # change the similarity comparison method function here
-                    for point_sim in pool.imap(ssim_similarity, multiprocessing_list):
-                        # point_sim = compare_sim([file.data[point[1]][point[0]], file.data[y][x]], sim_type)
-                        point_sims.append(point_sim)
+                    if len(points) <= 5:
+                        if sim_type == 'Euclidean':
+                            for point_data in multiprocessing_list:
+                                point_sims.append(euclidean_similarity(point_data))
+                        elif sim_type == 'SSIM':
+                            for point_sim in pool.imap(ssim_similarity, multiprocessing_list):
+                                point_sims.append(point_sim)
+                        elif sim_type == 'Cosine':
+                            for point_data in multiprocessing_list:
+                                point_sims.append(cosine_similarity(point_data))
+                    elif len(points) > 5:
+                        if sim_type == 'Euclidean':
+                            for point_sim in pool.imap(euclidean_similarity, multiprocessing_list):
+                                point_sims.append(point_sim)
+                        elif sim_type == 'SSIM':
+                            for point_sim in pool.imap(ssim_similarity, multiprocessing_list):
+                                point_sims.append(point_sim)
+                        elif sim_type == 'Cosine':
+                            for point_sim in pool.imap(cosine_similarity, multiprocessing_list):
+                                point_sims.append(point_sim)
+
+                    # for point_sim in pool.imap(euclidean_similarity, multiprocessing_list):
+                    #     # point_sim = compare_sim([file.data[point[1]][point[0]], file.data[y][x]], sim_type)
+                    #     point_sims.append(point_sim)
+
                     if np.max(point_sims) < min_similarity:
                         points.append((x, y))
                         point_patterns.append(file.data[y][x])
-                        print(f'added point{len(points)}: {x}, {y}')
+                        print(f'\nadded point{len(points)}: {x}, {y}')
                         variant_map[y][x] = len(points) + 1
                     else:
                         variant_map[y][x] = point_sims.index(np.max(point_sims)) + 1
                     pbar.update(1)
-        pd.DataFrame(variant_map).to_csv(f'variant map{sim_value}.csv')
-        np.savetxt(f'point data{sim_value}.txt', points)
-        analysis(points, sim_type)
-        variant_map_img = create_region_map()
-        # scale_value = 255/int(np.max(variant_map))
-        # variant_map = (variant_map * scale_value)
-        # variant_map = np.array(variant_map, dtype='uint8')
-        # variant_map_img = Image.fromarray(variant_map, mode='L')
-        variant_map_img.save(f'Variant map{sim_value}.png')
+        # pd.DataFrame(variant_map).to_csv(f'variant map{sim_value:.3f}.csv')
+        # np.savetxt(f'point data{sim_value:.3f}.txt', points)
+        if prev_points == points:
+            print('Same points as previous run. Skipping analysis.')
+        else:
+            analysis(points, sim_type)
+            prev_points = points.copy()
+            variant_map_img = create_region_map()
+            variant_map_img.save(f'{points[0]}_auto variant map_{sim_type}_{sim_value:.3f}.png')
+        if len(points) > max_points:
+            print('Stopping due to excessive points from high similarity value. Rerun with more max points'
+                  ' if desired.')
+            return
     return
 
 
 def cosine_similarity(img_arrays):
-    similarity = -1 * (spatial.distance.cosine(img_arrays[0].flatten(), img_arrays[1].flatten()) - 1)
+    array1 = img_arrays[0].flatten().astype('int16')
+    array2 = img_arrays[1].flatten().astype('int16')
+    angle = (spatial.distance.cosine(array1.flatten(), array2.flatten()) - 1) * -1
+    similarity = abs(angle)
     return similarity
 
 
@@ -480,14 +525,11 @@ def cosine_similarity(img_arrays):
 
 
 def euclidean_similarity(img_arrays):
-    array1 = img_arrays[0].flatten()
-    array2 = img_arrays[1].flatten()
+    array1 = img_arrays[0].flatten().astype('int16')
+    array2 = img_arrays[1].flatten().astype('int16')
     mag1 = np.linalg.norm(array1)
     mag2 = np.linalg.norm(array2)
-    dist = 0
-    for n in range(len(array1)):
-        dist += (int(array1[n]) - int(array2[n]))**2
-    dist = np.sqrt(dist)
+    dist = np.sqrt(np.sum(np.asarray(array1 - array2)**2))
     similarity = 1 - (dist/(abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
     return similarity
 
@@ -697,8 +739,9 @@ def create_region_map():
 
     region_map_image = Image.fromarray(region_map_array, mode='HSV')
     region_map_image = region_map_image.convert('RGB')
-    # region_map_image.show()
+    region_map_image.show()
     region_map_image.save('region_map_hsv.png')
+    label3['text'] = label3['text'] + 'region_map_hsv.png saved to program directory.'
     return region_map_image
 
         
