@@ -24,11 +24,11 @@ from math import sqrt
 import scipy.spatial.distance as ssd
 import pandas as pd
 
-
 # global variables
 file = None  # user selected file 
 selected_points = []  # user selected diffraction patterns
 similarity_values = None
+surf_img = None
 
 
 # prompts file dialog for user to select file
@@ -46,18 +46,9 @@ def load_file():
         label3['text'] = label3['text'] + "Error loading. Please check the file path and try again.\n"
 
 
-# takes in an image and returns a filtered version (gaussian)
-# def denoise(orig_image):
-#     denoise_radius = 3
-#     denoised_image = gaussian_filter(orig_image, denoise_radius)
-#     denoised_image = Image.fromarray(denoised_image)
-#     denoised_image = ImageOps.autocontrast(denoised_image, cutoff= )
-#     denoised_image = np.array(denoised_image)
-#     return denoised_image
-
-
 # returns a representation of the .blo file as a 2d array that can be turned into an image
 def create_surface_img(stem_file):
+    global surf_img
     # creates equal sized # of sections to take the center of the image
     sections = 8
     image_length = len(stem_file.data[0][0])
@@ -89,7 +80,7 @@ def create_surface_img(stem_file):
     surface_img = ImageOps.autocontrast(surface_img, cutoff=(1, 0))
     surface_img.save('surface image.jpeg', format='jpeg')
     surface_img_arr = np.asarray(surface_img)
-
+    surf_img = surface_img
     return surface_img_arr
 
 
@@ -108,7 +99,7 @@ def start_analysis():
             r.update()
             analysis_log['text'] = "Similarity mapping: please click on points you would like to " \
                                    "use to analyze the phase similarity.\n"
-    
+
         def confirm_point(point):
             global selected_points
             nonlocal surface_img_arr, tk_img_arr, tk_image
@@ -132,7 +123,7 @@ def start_analysis():
             r.update()
             # img = Image.fromarray(np.asarray(file.data[point[1]][point[0]]))
             # img.save(f'x{point[1]}_y{point[0]}.png')
-    
+
         def get_mouse_xy(event):
             global selected_points, file
             nonlocal surface_img_arr, img_x, img_y, tk_img_arr, prev_point
@@ -192,7 +183,7 @@ def start_analysis():
             preview_img = ImageTk.PhotoImage(image=preview_img)
             r.preview_img = preview_img
             c2.itemconfigure(point_img, image=preview_img)
-    
+
             r.point = point
             confirm_button.configure(command=lambda: confirm_point(point))
             r.update()
@@ -200,10 +191,6 @@ def start_analysis():
         def finalize_points():
             global selected_points
 
-            # for testing
-            # selected_points = [(39, 220), (64, 223), (126, 198), (191, 166), (270, 106), (74, 11)]  # SMA
-            selected_points = [(40, 52), (12, 15), (41, 14), (63, 3)]  # VO2
-            # selected_points = [(182, 117), (186, 125), (71, 77), (173, 79), (189, 90)]  # Crazy SMA
             sim_type = sim_selected.get()
             if len(selected_points) >= 1:
                 print("Selected points (x,y):")
@@ -216,39 +203,6 @@ def start_analysis():
                 label1['text'] = label1['text'] + "Analysis complete.\n"
             else:
                 reset_points()
-
-        def compare_points():
-            global selected_points
-
-            # selected_points = [(39, 220), (81, 219), (64, 223), (126, 198), (191, 166), (270, 106)]  # SMA sample
-            # selected_points = [(40, 52), (80, 51), (12, 15), (41, 14), (63, 3)]  # VO2
-            sim_type = sim_selected.get()
-            if len(selected_points) >= 1:
-                print("Selected points (x,y):")
-                for i in range(len(selected_points)):
-                    print(f"point{i + 1} = {selected_points[i][0]}, {selected_points[i][1]}")
-                analysis_log['text'] = analysis_log['text'] + "Starting comparison...\n"
-                sim_results = []
-                base_img = file.data[selected_points[0][1]][selected_points[0][0]]
-                for point in selected_points:
-                    compare_img = file.data[point[1]][point[0]]
-                    if sim_type == 'Euclidean':
-                        sim_results.append(euclidean_similarity([base_img, compare_img]))
-                    elif sim_type == 'SSIM':
-                        sim_results.append(ssim_similarity([base_img, compare_img]))
-                    elif sim_type == 'Cosine':
-                        sim_results.append(cosine_similarity([base_img, compare_img]))
-                    save_img = Image.fromarray(compare_img)
-                    save_img.save(f'x{point[1]}_y{point[0]}.png')
-                c2.unbind('<Button-1>')
-                print(sim_type)
-                for sim in sim_results:
-                    print(f'{sim:.3f}, ', end='')
-                print()
-            else:
-                reset_points()
-
-            return
 
         def identify_variants():
             global selected_points
@@ -263,14 +217,15 @@ def start_analysis():
             return
 
             # main window
+
         r = tk.Toplevel(root)
         r.title('')
-    
+
         canvas_height = 640
         canvas_width = 1000
         c = tk.Canvas(r, height=canvas_height, width=canvas_width)
         c.pack()
-    
+
         f = tk.Frame(r, bg='#FFFFFF')
         f.place(relwidth=1, relheight=1)
 
@@ -286,7 +241,7 @@ def start_analysis():
         tk_img_arr_orig = tk_img_arr
         # adjusts the image size to scale up to 400 based on the aspect ratio of the surface image.
         if img_x > img_y:
-            tk_image = Image.fromarray(surface_img_arr).resize((400, int((img_y/img_x) * 400)))
+            tk_image = Image.fromarray(surface_img_arr).resize((400, int((img_y / img_x) * 400)))
         elif img_x < img_y:
             tk_image = Image.fromarray(surface_img_arr).resize((int((img_x / img_y) * 400), 400))
         else:
@@ -295,7 +250,7 @@ def start_analysis():
         # canvas for surface image
 
         if img_x > img_y:
-            c1 = tk.Canvas(r, width=400, height=int((img_y/img_x) * 400))
+            c1 = tk.Canvas(r, width=400, height=int((img_y / img_x) * 400))
         elif img_x < img_y:
             c1 = tk.Canvas(r, width=int((img_x / img_y) * 400), height=400)
         else:
@@ -305,49 +260,45 @@ def start_analysis():
         tk_image = ImageTk.PhotoImage(image=tk_image)
         bf_image = c1.create_image(0, 0, anchor='nw', image=tk_image, tag='img')
         c1.bind('<Button-1>', get_mouse_xy)
-    
+
         # canvas for preview diffraction pattern
         c2 = tk.Canvas(r, width=400, height=400)
         c2.place(relx=0.93, anchor='ne')
         point_img = c2.create_image(0, 0, anchor='nw', image=None)
-    
+
         # message log
         analysis_log = tk.Message(f, bg='#FFFFFF', font=('Calibri', 15), anchor='nw', justify='left',
                                   highlightthickness=0, bd=0, width=canvas_width * 0.9)
         analysis_log.place(relx=0.05, rely=0.65, relwidth=0.9, relheight=0.25)
         analysis_log['text'] = "Similarity mapping: please click on points you would like to " \
                                "use to analyze the phase similarity.\n"
-    
+
         # interactive buttons
         reset_button = tk.Button(f, text='Reset', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
                                  bd=0, activebackground='#D4D4D4', activeforeground='#252525',
                                  command=lambda: reset_points(), pady=0.02, fg='#373737', borderwidth='2',
                                  relief="groove")
         reset_button.place(relx=0.15, rely=0.88, relwidth=0.20, relheight=0.07)
-    
+
         confirm_button = tk.Button(f, text='Confirm Point', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
                                    bd=0, activebackground='#D4D4D4', activeforeground='#252525',
                                    command=lambda: confirm_point(None), pady=0.02, fg='#373737', borderwidth='2',
                                    relief="groove")
         confirm_button.place(relx=0.40, rely=0.88, relwidth=0.20, relheight=0.07)
-    
-        analyze_button = tk.Button(f, text='Analyze points', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
+
+        analyze_button = tk.Button(f, text='User selecting reference points', bg='#F3F3F3', font=('Calibri', 16),
+                                   highlightthickness=0,
                                    bd=0, activebackground='#D4D4D4', activeforeground='#252525',
                                    command=lambda: finalize_points(), pady=0.02, fg='#373737', borderwidth='2',
                                    relief="groove")
-        analyze_button.place(relx=0.65, rely=0.88, relwidth=0.20, relheight=0.07)
+        analyze_button.place(relx=0.62, rely=0.88, relwidth=0.35, relheight=0.07)
 
-        compare_point_button = tk.Button(f, text='Compare points', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0,
-                                   bd=0, activebackground='#D4D4D4', activeforeground='#252525',
-                                   command=lambda: compare_points(), pady=0.02, fg='#373737', borderwidth='2',
-                                   relief="groove")
-        compare_point_button.place(relx=0.65, rely=0.78, relwidth=0.20, relheight=0.07)
-
-        identify_variants_button = tk.Button(f, text='Identify Variants', bg='#F3F3F3', font=('Calibri', 20),
-                                             highlightthickness=0, bd=0, activebackground='#D4D4D4',
+        identify_variants_button = tk.Button(f, text='Automatic selecting reference points', bg='#F3F3F3',
+                                             font=('Calibri', 16), highlightthickness=0, bd=0,
+                                             activebackground='#D4D4D4',
                                              activeforeground='#252525', command=lambda: identify_variants(), pady=0.02,
-                                             fg='#373737', borderwidth='2',relief="groove")
-        identify_variants_button.place(relx=0.65, rely=0.72, relwidth=0.20, relheight=0.05)
+                                             fg='#373737', borderwidth='2', relief="groove")
+        identify_variants_button.place(relx=0.62, rely=0.78, relwidth=0.35, relheight=0.07)
 
         sim_options = ['Euclidean', 'Cosine', 'SSIM']
         sim_selected = tk.StringVar()
@@ -357,7 +308,7 @@ def start_analysis():
 
         reset_points()
         r.mainloop()
-        
+
     else:
         label3['text'] = "Please select a file and try again.\n"
 
@@ -425,7 +376,7 @@ def variant_id_analysis(points, sim_type):
     sim_range_values = sim_range_values[(sim_range_values < 0.99)]
     sim_std_dev = np.std(sim_range_values)
     sim_max = np.max(sim_range_values) - (0.5 * sim_std_dev)
-    sim_min = np.min(sim_range_values) + sim_std_dev
+    sim_min = np.min(sim_range_values)
 
     print(f'Min similarity: {sim_min}')
     print(f'Max similarity: {sim_max}')
@@ -437,6 +388,7 @@ def variant_id_analysis(points, sim_type):
     # A relatively high value sim value will take a long time to calculate and generate tons of points.
 
     sim_range = np.arange(sim_min, sim_max, step_size)
+    sim_range = [0.696, 0.705, 0.732, 0.751, 0.769, 0.778, 0.787, 0.796]
     print(sim_range)
     prev_points = []
     for sim_value in sim_range:
@@ -446,7 +398,7 @@ def variant_id_analysis(points, sim_type):
         variant_map = np.zeros((y_length, x_length), dtype='uint8')
         pool = Pool(processes=None)
         print(f'\n{points}')
-        with tqdm.tqdm(total=y_length*x_length) as pbar:
+        with tqdm.tqdm(total=y_length * x_length) as pbar:
             for y in range(int(y_length)):
                 for x in range(int(x_length)):
                     multiprocessing_list = []
@@ -494,8 +446,13 @@ def variant_id_analysis(points, sim_type):
         else:
             analysis(points, sim_type)
             prev_points = points.copy()
-            variant_map_img = create_region_map()
+            variant_map_img = create_region_map(sim_value)
             variant_map_img.save(f'{points[0]}_auto variant map_{sim_type}_{sim_value:.3f}.png')
+            # animation_dir = os.path.dirname(os.path.abspath(__file__)) + '\\Animations\\Test2'
+            # str_sim_val = f'{sim_value:.3f}'
+            # os.mkdir(os.path.join(animation_dir, str_sim_val))
+            # for i, img in enumerate(img_list):
+            #     img.save(f'{os.path.join(animation_dir, str_sim_val)}\\map_frame{i}.png')
         if len(points) > max_points:
             print('Stopping due to excessive points from high similarity value. Rerun with more max points'
                   ' if desired.')
@@ -511,26 +468,13 @@ def cosine_similarity(img_arrays):
     return similarity
 
 
-# def mahalanobis_dist(img_arrays):
-#     array1 = img_arrays[0].flatten()
-#     array2 = img_arrays[1].flatten()
-#     mag1 = np.linalg.norm(array1)
-#     mag2 = np.linalg.norm(array2)
-#     combined_array = np.vstack([array1, array2])
-#     v = np.cov(combined_array.T)
-#     inv_v = np.linalg.inv(v)
-#     dist = ssd.mahalanobis(array1, array2, inv_v)
-#     similarity = 1 - (dist / (abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
-#     return similarity
-
-
 def euclidean_similarity(img_arrays):
     array1 = img_arrays[0].flatten().astype('int16')
     array2 = img_arrays[1].flatten().astype('int16')
     mag1 = np.linalg.norm(array1)
     mag2 = np.linalg.norm(array2)
-    dist = np.sqrt(np.sum(np.asarray(array1 - array2)**2))
-    similarity = 1 - (dist/(abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
+    dist = np.sqrt(np.sum(np.asarray(array1 - array2) ** 2))
+    similarity = 1 - (dist / (abs(mag1) + abs(mag2)))  # normalizes the similarity from 0 (all different) to 1 (same)
     return similarity
 
 
@@ -650,37 +594,7 @@ def heat_map():
         fig.show()
 
 
-# creates a histogram pop-up UI
-def create_histogram():
-    global similarity_values
-
-    if file is None:
-        label1['text'] = "Please load a file before creating a histogram.\n"
-    elif similarity_values is None:
-        label1['text'] = "Please analyze the file before creating a histogram.\n"
-    else:
-        root.update()
-        for p in range(len(similarity_values)):
-            flattened_similarity = np.array(similarity_values[p]).flat
-            for i in range(len(flattened_similarity)):
-                if flattened_similarity[i] == 0:
-                    flattened_similarity[i] = float('NaN')
-
-            fig, a = plt.subplots(figsize=(6, 5.5))
-            plt.xlabel('Distance from center peak', fontsize=10)
-            plt.ylabel('Counts', fontsize=10)
-            plt.title(f'Distance Counts: point{p+1}', fontsize=10)
-
-            plt.hist(flattened_similarity, bins=50)
-
-            bar_chart_window = tk.Toplevel(root)
-            bar_chart_window.geometry('600x600')
-            chart_type = FigureCanvasTkAgg(plt.gcf(), bar_chart_window)
-            chart_type.draw()
-            chart_type.get_tk_widget().place(relx=0.0, rely=0.0, relwidth=1)
-
-
-def create_region_map():
+def create_region_map(sim_value=0.0):
     global similarity_values
 
     points = len(similarity_values)
@@ -724,18 +638,30 @@ def create_region_map():
     #                     region_map_array[y][x] = region_colors_hsv[i]
 
     # cleans up closest similarity for any missing spaces, minimum similarity is 0.75
+    # img_list = []
+    # animation_dir = os.path.dirname(os.path.abspath(__file__)) + '\\Animations\\Test3'
+    # str_sim_val = f'{sim_value:.3f}'
+    # os.mkdir(os.path.join(animation_dir, str_sim_val))
+    # img_index = 0
     for y in range(len(region_map_array)):
         for x in range(len(region_map_array[y])):
             if region_map_array[y][x].all() == 0:
                 max_sim = 0.0
                 min_sim = 0.0
                 index = 0
+                # Loops through the similarity values for each selected point and gets the highest sim at that location
                 for i in range(len(similarity_values)):
                     if similarity_values[i][y][x] > max_sim:
                         max_sim = similarity_values[i][y][x]
                         index = i
+                # Assigns a unique color to the location based on the point with the highest sim value
                 if max_sim >= min_sim:
                     region_map_array[y][x] = region_colors_hsv[index]
+            # if img_index % 20 == 0:
+            #     map_frame = Image.fromarray(region_map_array, mode='HSV')
+            #     map_frame = map_frame.convert('RGB')
+            #     map_frame.save(f'{os.path.join(animation_dir, str_sim_val)}\\map_frame{img_index}.png')
+            # img_index += 1
 
     region_map_image = Image.fromarray(region_map_array, mode='HSV')
     region_map_image = region_map_image.convert('RGB')
@@ -744,7 +670,7 @@ def create_region_map():
     label3['text'] = label3['text'] + 'region_map_hsv.png saved to program directory.'
     return region_map_image
 
-        
+
 if __name__ == "__main__":
     HEIGHT = 700
     WIDTH = 800
@@ -792,23 +718,19 @@ if __name__ == "__main__":
                         command=lambda: start_analysis(), pady=0.02, fg='#373737', borderwidth='2',
                         relief="groove")
     button1.place(relx=0.29, rely=0.28, relwidth=0.42, relheight=0.05)
-    
-    button2 = tk.Button(frame, text='Create Similarity Heat Map', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
+
+    button2 = tk.Button(frame, text='Create Similarity Heat Map', bg='#F3F3F3', font=('Calibri', 20),
+                        highlightthickness=0, bd=0,
                         activebackground='#D4D4D4', activeforeground='#252525',
                         command=lambda: heat_map(), pady=0.02, fg='#373737', borderwidth='2',
                         relief="groove")
     button2.place(relx=0.29, rely=0.34, relwidth=0.42, relheight=0.05)
 
-    button3 = tk.Button(frame, text='Create Similarity Histogram', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
-                        activebackground='#D4D4D4', activeforeground='#252525',
-                        command=lambda: create_histogram(), pady=0.02, fg='#373737', borderwidth='2',
-                        relief="groove")
-    button3.place(relx=0.29, rely=0.40, relwidth=0.42, relheight=0.05)
-
-    button4 = tk.Button(frame, text='Create Similarity Region Map', bg='#F3F3F3', font=('Calibri', 20), highlightthickness=0, bd=0,
+    button4 = tk.Button(frame, text='Create Similarity Region Map', bg='#F3F3F3', font=('Calibri', 20),
+                        highlightthickness=0, bd=0,
                         activebackground='#D4D4D4', activeforeground='#252525',
                         command=lambda: create_region_map(), pady=0.02, fg='#373737', borderwidth='2',
                         relief="groove")
-    button4.place(relx=0.29, rely=0.46, relwidth=0.42, relheight=0.05)
+    button4.place(relx=0.29, rely=0.40, relwidth=0.42, relheight=0.05)
 
     root.mainloop()
